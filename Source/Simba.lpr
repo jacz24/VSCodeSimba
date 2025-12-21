@@ -22,7 +22,7 @@ uses
   simba.form_colorpickhistory,
   simba.plugin_dump, simba.script_runner,
   simba.initializations, simba.ide_analytics, simba.script,
-  simba.openssl;
+  simba.openssl, simba.lsp_server;
 
 begin
   {$IF DECLARED(SetHeapTraceOutput)}
@@ -49,6 +49,7 @@ begin
     DebugLn('  --run       Run a script');
     DebugLn('  --compile   Compile a script');
     DebugLn('  --open      Open a script in Simba');
+    DebugLn('  --lsp       Start as Language Server Protocol server for IDE integration');
     DebugLn('');
     DebugLn('Examples:');
     DebugLn('  Run a script without opening Simba:');
@@ -59,6 +60,9 @@ begin
     DebugLn('');
     DebugLn('  Open a script in Simba and run');
     DebugLn('    Simba.exe --open --run "script.simba"');
+    DebugLn('');
+    DebugLn('  Start as Language Server for VSCode/IDE integration');
+    DebugLn('    Simba.exe --lsp');
     DebugLn('');
 
     Halt();
@@ -81,6 +85,13 @@ begin
     with DumpPlugin(Application.GetOptionValue('dumpplugin')) do
       SaveToFile(Application.Params[Application.ParamCount]);
 
+    Halt();
+  end;
+
+  if Application.HasOption('lsp') then
+  begin
+    SimbaProcessType := ESimbaProcessType.SCRIPT;
+    RunLSPServer();
     Halt();
   end;
 

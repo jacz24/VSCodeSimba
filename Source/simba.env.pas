@@ -27,13 +27,17 @@ type
     FPackagesPath: String;
     FScreenshotsPath: String;
     FBackupsPath: String;
+    FCustomIncludePaths: TStringList;
   public
     class constructor Create;
+    class destructor Destroy;
 
     class function FindPlugin(FileName: String; ExtraSearchDirs: TStringArray = nil): String;
     class function FindInclude(FileName: String; ExtraSearchDirs: TStringArray = nil): String;
     class function HasInclude(FileName: String; ExtraSearchDirs: TStringArray = nil): Boolean;
     class function HasPlugin(FileName: String; ExtraSearchDirs: TStringArray = nil): Boolean;
+    class procedure AddIncludePath(const Path: String);
+    class procedure LoadIncludePathsFromEnv;
 
     class property SimbaPath: String read FSimbaPath;
     class property IncludesPath: String read FIncludesPath;
@@ -87,11 +91,38 @@ end;
 class function SimbaEnv.FindInclude(FileName: String; ExtraSearchDirs: TStringArray): String;
 var
   SearchDir: String;
+  I: Integer;
 begin
   if TSimbaFile.FileExists(FileName) then
     Exit(FileName);
 
-  for SearchDir in ExtraSearchDirs + [IncludesPath, SimbaPath] do
+  // Search in extra directories (passed by codetools, usually script directory)
+  for SearchDir in ExtraSearchDirs do
+  begin
+    Result := TSimbaPath.PathJoin([SearchDir, FileName]);
+    if TSimbaFile.FileExists(Result) then
+      Exit(Result);
+
+    Result := TSimbaPath.PathJoin([SearchDir, FileName]) + '.simba';
+    if TSimbaFile.FileExists(Result) then
+      Exit(Result);
+  end;
+
+  // Search in custom include paths (from settings/environment)
+  if Assigned(FCustomIncludePaths) then
+    for I := 0 to FCustomIncludePaths.Count - 1 do
+    begin
+      Result := TSimbaPath.PathJoin([FCustomIncludePaths[I], FileName]);
+      if TSimbaFile.FileExists(Result) then
+        Exit(Result);
+
+      Result := TSimbaPath.PathJoin([FCustomIncludePaths[I], FileName]) + '.simba';
+      if TSimbaFile.FileExists(Result) then
+        Exit(Result);
+    end;
+
+  // Search in default Simba includes and Simba path
+  for SearchDir in [IncludesPath, SimbaPath] do
   begin
     Result := TSimbaPath.PathJoin([SearchDir, FileName]);
     if TSimbaFile.FileExists(Result) then
@@ -103,6 +134,41 @@ begin
   end;
 
   Result := '';
+end;
+
+class procedure SimbaEnv.AddIncludePath(const Path: String);
+begin
+  if (Path <> '') and DirectoryExists(Path) then
+  begin
+    if not Assigned(FCustomIncludePaths) then
+    begin
+      FCustomIncludePaths := TStringList.Create;
+      FCustomIncludePaths.Duplicates := dupIgnore;
+    end;
+    FCustomIncludePaths.Add(IncludeTrailingPathDelimiter(Path));
+  end;
+end;
+
+class procedure SimbaEnv.LoadIncludePathsFromEnv;
+var
+  EnvPaths: String;
+  PathList: TStringList;
+  I: Integer;
+begin
+  EnvPaths := GetEnvironmentVariable('SIMBA_INCLUDE_PATHS');
+  if EnvPaths <> '' then
+  begin
+    PathList := TStringList.Create;
+    try
+      PathList.Delimiter := ';';
+      PathList.StrictDelimiter := True;
+      PathList.DelimitedText := EnvPaths;
+      for I := 0 to PathList.Count - 1 do
+        AddIncludePath(PathList[I]);
+    finally
+      PathList.Free;
+    end;
+  end;
 end;
 
 class function SimbaEnv.HasInclude(FileName: String; ExtraSearchDirs: TStringArray): Boolean;
@@ -138,6 +204,15 @@ begin
   FTempPath     := Init(FDataPath + 'Temp');
   FPackagesPath := Init(FDataPath + 'Packages');
   FBackupsPath  := Init(FDataPath + 'Backups');
+
+  // Load custom include paths from environment variable (for LSP/IDE integration)
+  LoadIncludePathsFromEnv;
+end;
+
+class destructor SimbaEnv.Destroy;
+begin
+  if Assigned(FCustomIncludePaths) then
+    FreeAndNil(FCustomIncludePaths);
 end;
 
 end.

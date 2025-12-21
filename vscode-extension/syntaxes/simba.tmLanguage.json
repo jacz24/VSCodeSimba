@@ -1,0 +1,200 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Simba",
+  "scopeName": "source.simba",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#functions" },
+    { "include": "#operators" },
+    { "include": "#directives" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.simba",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.simba",
+          "begin": "\\{(?!\\$)",
+          "end": "\\}"
+        },
+        {
+          "name": "comment.block.parenthesis.simba",
+          "begin": "\\(\\*",
+          "end": "\\*\\)"
+        }
+      ]
+    },
+    "directives": {
+      "patterns": [
+        {
+          "name": "meta.preprocessor.simba",
+          "match": "\\{\\$[^}]*\\}"
+        },
+        {
+          "name": "meta.preprocessor.include.simba",
+          "match": "\\{\\$(?i:include|i)\\s+([^}]*)\\}",
+          "captures": {
+            "1": { "name": "string.quoted.other.simba" }
+          }
+        },
+        {
+          "name": "meta.preprocessor.define.simba",
+          "match": "\\{\\$(?i:define|ifdef|ifndef|else|endif|undef)\\b[^}]*\\}"
+        },
+        {
+          "name": "meta.directive.ide.simba",
+          "match": "\\{%[^}]*\\}"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.simba",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.simba",
+              "match": "''"
+            }
+          ]
+        },
+        {
+          "name": "constant.character.simba",
+          "match": "#\\d+"
+        },
+        {
+          "name": "constant.character.hex.simba",
+          "match": "#\\$[0-9A-Fa-f]+"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.simba",
+          "match": "\\$[0-9A-Fa-f]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.simba",
+          "match": "%[01]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.simba",
+          "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.simba",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.simba",
+          "match": "\\b(?i:if|then|else|case|of|for|to|downto|while|repeat|until|do|begin|end|with|try|except|finally|raise|break|continue|exit)\\b"
+        },
+        {
+          "name": "keyword.declaration.simba",
+          "match": "\\b(?i:program|unit|uses|var|const|type|function|procedure|operator|property|record|object|array|set|enum|union|packed|forward|external|overload|override|static|private|strict)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.simba",
+          "match": "\\b(?i:and|or|xor|not|shl|shr|div|mod|in|is|as|at)\\b"
+        },
+        {
+          "name": "keyword.other.simba",
+          "match": "\\b(?i:out|constref|deprecated|experimental|unimplemented|label)\\b"
+        },
+        {
+          "name": "constant.language.boolean.simba",
+          "match": "\\b(?i:true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.simba",
+          "match": "\\b(?i:nil)\\b"
+        },
+        {
+          "name": "variable.language.simba",
+          "match": "\\b(?i:self|result)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.simba",
+          "match": "\\b(?i:Integer|Int8|Int16|Int32|Int64|UInt8|UInt16|UInt32|UInt64|Byte|Word|LongWord|NativeInt|NativeUInt|Single|Double|Extended|Currency|Boolean|Char|String|AnsiString|WideString|ShortString|PChar|Pointer|Variant)\\b"
+        },
+        {
+          "name": "storage.type.simba",
+          "match": "\\b(?i:TPoint|TPointArray|TBox|TBoxArray|TQuad|TQuadArray|TColor|TColorArray|TIntegerArray|TStringArray|TSingleArray|TDoubleArray|TBooleanArray|T2DIntegerArray|T2DStringArray|T2DPointArray|TImage|TTarget|TMatchTemplateCache)\\b"
+        },
+        {
+          "name": "storage.type.class.simba",
+          "match": "\\bT[A-Z][a-zA-Z0-9_]*\\b"
+        },
+        {
+          "name": "storage.type.enum.simba",
+          "match": "\\bE[A-Z][a-zA-Z0-9_]*\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "entity.name.function.simba",
+          "match": "\\b(?i:function|procedure)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\(|:|;)",
+          "captures": {
+            "1": { "name": "entity.name.function.simba" }
+          }
+        },
+        {
+          "name": "support.function.builtin.simba",
+          "match": "\\b(?i:WriteLn|Write|Wait|Sleep|GetTickCount|Random|RandomRange|Inc|Dec|High|Low|Length|SetLength|Copy|Delete|Insert|Pos|Format|IntToStr|StrToInt|StrToIntDef|FloatToStr|StrToFloat|Ord|Chr|Abs|Sqr|Sqrt|Power|Sin|Cos|Tan|ArcSin|ArcCos|ArcTan|ArcTan2|Exp|Ln|Log10|Log2|Floor|Ceil|Round|Trunc|Frac|Min|Max|Swap|Sort|Sorted|Reversed|Sum|Mean|Median|Mode|Variance|Unique|Contains|Find|FindAll|IndexOf|Append|Extend|Pop)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.simba",
+          "match": ":=|\\+=|-=|\\*=|/="
+        },
+        {
+          "name": "keyword.operator.comparison.simba",
+          "match": "<=|>=|<>|<|>|="
+        },
+        {
+          "name": "keyword.operator.arithmetic.simba",
+          "match": "\\+|-|\\*|/|\\*\\*"
+        },
+        {
+          "name": "keyword.operator.pointer.simba",
+          "match": "@|\\^"
+        },
+        {
+          "name": "punctuation.separator.simba",
+          "match": ";|,|:"
+        },
+        {
+          "name": "punctuation.accessor.simba",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.range.simba",
+          "match": "\\.\\."
+        }
+      ]
+    }
+  }
+}

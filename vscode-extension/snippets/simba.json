@@ -1,0 +1,144 @@
+{
+  "Begin Block": {
+    "prefix": "begin",
+    "body": [
+      "begin",
+      "\t$0",
+      "end;"
+    ],
+    "description": "Insert begin/end block"
+  },
+  "If Then": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition} then",
+      "\t$0"
+    ],
+    "description": "If statement"
+  },
+  "If Then Else": {
+    "prefix": "ife",
+    "body": [
+      "if ${1:condition} then",
+      "\t$2",
+      "else",
+      "\t$0"
+    ],
+    "description": "If-else statement"
+  },
+  "If Then Begin End": {
+    "prefix": "ifb",
+    "body": [
+      "if ${1:condition} then",
+      "begin",
+      "\t$0",
+      "end;"
+    ],
+    "description": "If with begin/end block"
+  },
+  "For Loop": {
+    "prefix": "for",
+    "body": [
+      "for ${1:i} := ${2:0} to ${3:count} do",
+      "\t$0"
+    ],
+    "description": "For loop"
+  },
+  "For Loop with Begin": {
+    "prefix": "forb",
+    "body": [
+      "for ${1:i} := ${2:0} to ${3:count} do",
+      "begin",
+      "\t$0",
+      "end;"
+    ],
+    "description": "For loop with begin/end block"
+  },
+  "While Loop": {
+    "prefix": "while",
+    "body": [
+      "while ${1:condition} do",
+      "\t$0"
+    ],
+    "description": "While loop"
+  },
+  "While Loop with Begin": {
+    "prefix": "whileb",
+    "body": [
+      "while ${1:condition} do",
+      "begin",
+      "\t$0",
+      "end;"
+    ],
+    "description": "While loop with begin/end block"
+  },
+  "Repeat Until": {
+    "prefix": "repeat",
+    "body": [
+      "repeat",
+      "\t$0",
+      "until ${1:condition};"
+    ],
+    "description": "Repeat-until loop"
+  },
+  "Try Finally": {
+    "prefix": "try",
+    "body": [
+      "try",
+      "\t$0",
+      "finally",
+      "\t",
+      "end;"
+    ],
+    "description": "Try-finally block"
+  },
+  "Try Except": {
+    "prefix": "trye",
+    "body": [
+      "try",
+      "\t$0",
+      "except",
+      "\t",
+      "end;"
+    ],
+    "description": "Try-except block"
+  },
+  "Procedure": {
+    "prefix": "proc",
+    "body": [
+      "procedure ${1:Name}(${2:params});",
+      "begin",
+      "\t$0",
+      "end;"
+    ],
+    "description": "Procedure declaration"
+  },
+  "Function": {
+    "prefix": "func",
+    "body": [
+      "function ${1:Name}(${2:params}): ${3:Result};",
+      "begin",
+      "\t$0",
+      "end;"
+    ],
+    "description": "Function declaration"
+  },
+  "Case Statement": {
+    "prefix": "case",
+    "body": [
+      "case ${1:expression} of",
+      "\t${2:value}: $0;",
+      "end;"
+    ],
+    "description": "Case statement"
+  },
+  "Record": {
+    "prefix": "record",
+    "body": [
+      "record",
+      "\t$0",
+      "end;"
+    ],
+    "description": "Record type"
+  }
+}

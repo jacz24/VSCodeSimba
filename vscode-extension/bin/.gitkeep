@@ -1,0 +1,7 @@
+# Binary files are added during the release build process
+# Structure:
+# bin/
+#   win32-x64/SimbaLSP.exe
+#   darwin-x64/SimbaLSP
+#   darwin-arm64/SimbaLSP
+#   linux-x64/SimbaLSP

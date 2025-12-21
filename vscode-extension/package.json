@@ -1,0 +1,170 @@
+{
+  "name": "simba-lang",
+  "displayName": "Simba Language Support",
+  "description": "Language support for Simba scripts (.simba files) - syntax highlighting, autocompletion, go-to-definition, and more",
+  "version": "1.0.0",
+  "publisher": "villavu",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Villavu/Simba"
+  },
+  "license": "GPL-3.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "simba",
+    "lape",
+    "pascal",
+    "automation",
+    "scripting"
+  ],
+  "activationEvents": [
+    "onLanguage:simba"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "simba",
+        "aliases": [
+          "Simba",
+          "simba"
+        ],
+        "extensions": [
+          ".simba"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "simba",
+        "scopeName": "source.simba",
+        "path": "./syntaxes/simba.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "simba",
+        "path": "./snippets/simba.json"
+      }
+    ],
+    "configuration": {
+      "title": "Simba",
+      "properties": {
+        "simba.lsp.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the Simba Language Server for code intelligence features"
+        },
+        "simba.lsp.simbaLspPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to standalone SimbaLSP binary. This is the preferred LSP server - a lightweight console application. Leave empty to auto-detect."
+        },
+        "simba.lsp.simbaPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to full Simba binary (will use --lsp flag). Only used if SimbaLSP is not found. Leave empty to auto-detect."
+        },
+        "simba.lsp.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the Simba language server"
+        },
+        "simba.includePaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional paths to search for Simba includes. The Simba/Includes folder and workspace folders are included by default."
+        },
+        "simba.runPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to Simba binary for running scripts. Leave empty to auto-detect or use the same path as simba.lsp.simbaPath."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "simba.restartServer",
+        "title": "Simba: Restart Language Server"
+      },
+      {
+        "command": "simba.runScript",
+        "title": "Simba: Run Script",
+        "icon": "$(play)"
+      },
+      {
+        "command": "simba.stopScript",
+        "title": "Simba: Stop Script",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "simba.selectTargetWindow",
+        "title": "Simba: Select Target Window",
+        "icon": "$(window)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "simba.runScript",
+        "key": "f5",
+        "when": "editorLangId == simba"
+      },
+      {
+        "command": "simba.stopScript",
+        "key": "shift+f5",
+        "when": "editorLangId == simba && simba.scriptRunning"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "simba.runScript",
+          "when": "editorLangId == simba && !simba.scriptRunning",
+          "group": "navigation"
+        },
+        {
+          "command": "simba.stopScript",
+          "when": "editorLangId == simba && simba.scriptRunning",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "node esbuild.js",
+    "watch": "tsc -watch -p ./",
+    "package": "node esbuild.js --production",
+    "lint": "eslint src",
+    "build": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.75.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "typescript-eslint": "^8.18.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.17.0",
+    "typescript": "^5.3.2"
+  }
+}

@@ -65,7 +65,7 @@
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir);$(LazarusDir)/components/synedit;../Third-Party/lape"/>
             <Libraries Value="../Third-Party/lape/extensions/ffi/bin/win32"/>
-            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools"/>
+            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools;lsp"/>
             <UnitOutputDirectory Value="$(ProjPath)../build/$(BuildMode)/$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -115,7 +115,7 @@
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir);$(LazarusDir)/components/synedit;../Third-Party/lape"/>
             <Libraries Value="../Third-Party/lape/extensions/ffi/bin/win64"/>
-            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools"/>
+            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools;lsp"/>
             <UnitOutputDirectory Value="$(ProjPath)../build/$(BuildMode)/$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -165,7 +165,7 @@
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir);$(LazarusDir)/components/synedit;../Third-Party/lape"/>
             <Libraries Value="../Third-Party/lape/extensions/ffi/bin/win64"/>
-            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools"/>
+            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools;lsp"/>
             <UnitOutputDirectory Value="$(ProjPath)../build/$(BuildMode)/$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -207,7 +207,7 @@
           </Target>
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir);$(LazarusDir)/components/synedit;../Third-Party/lape"/>
-            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools"/>
+            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools;lsp"/>
             <UnitOutputDirectory Value="$(ProjPath)../build/$(BuildMode)/$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -255,7 +255,7 @@
           </Target>
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir);$(LazarusDir)/components/synedit;../Third-Party/lape"/>
-            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools"/>
+            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools;lsp"/>
             <UnitOutputDirectory Value="$(ProjPath)../build/$(BuildMode)/$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -296,7 +296,7 @@
           </Target>
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir);$(LazarusDir)/components/synedit;../Third-Party/lape"/>
-            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools"/>
+            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools;lsp"/>
             <UnitOutputDirectory Value="$(ProjPath)../build/$(BuildMode)/$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -343,7 +343,7 @@
           </Target>
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir);$(LazarusDir)/components/synedit;../Third-Party/lape"/>
-            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools"/>
+            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools;lsp"/>
             <UnitOutputDirectory Value="$(ProjPath)../build/$(BuildMode)/$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -396,7 +396,7 @@
           </Target>
           <SearchPaths>
             <IncludeFiles Value="$(ProjOutDir);$(LazarusDir)/components/synedit;../Third-Party/lape"/>
-            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools"/>
+            <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools;lsp"/>
             <UnitOutputDirectory Value="$(ProjPath)../build/$(BuildMode)/$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -895,7 +895,7 @@
     <SearchPaths>
       <IncludeFiles Value="$(ProjOutDir);$(LazarusDir)/components/synedit;../Third-Party/lape"/>
       <Libraries Value="../Third-Party/lape/extensions/ffi/bin/win64"/>
-      <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools"/>
+      <OtherUnitFiles Value="$(ProjPath);../Third-Party;../Third-Party/lape;../Third-Party/lape/extensions/ffi;script/imports;script/imports/lcl;script;ide;ide/codetools;lsp"/>
       <UnitOutputDirectory Value="$(ProjPath)../build/$(BuildMode)/$(TargetCPU)-$(TargetOS)"/>
     </SearchPaths>
     <Parsing>

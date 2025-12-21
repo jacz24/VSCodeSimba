@@ -1,0 +1,14 @@
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+tsconfig.json
+esbuild.js
+**/*.ts
+**/*.map
+node_modules/**
+.eslintrc.json
+
+# Include LSP binaries
+!bin/**
+bin/.gitkeep
