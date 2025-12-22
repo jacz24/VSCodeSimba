@@ -1425,13 +1425,16 @@ end;
 procedure TSimbaLSPServer.HandleTextDocumentSignatureHelp(const ID: TJSONData; const Params: TJSONObject);
 var
   TextDocument, Position: TJSONObject;
-  URI, Content, FilePath, FuncName: String;
+  URI, Content, FilePath, FuncName, Expr: String;
   Line, Character, CaretPos, I, LineStart, ParenPos, ParamIndex: Integer;
+  DotPos, ExprStart, FuncNameStart, FuncNameEnd: Integer;
+  IsMemberAccess: Boolean;
+  Ch: Char;
   Codeinsight: TCodeinsight;
-  Decls: TDeclarationArray;
+  Decls, Members, MethodParams: TDeclarationArray;
   SigHelp: TLSPSignatureHelp;
   Method: TDeclaration_Method;
-  MethodParams: TDeclarationArray;
+  ExprDecl, Decl: TDeclaration;
 begin
   TextDocument := Params.Get('textDocument', TJSONObject(nil));
   Position := Params.Get('position', TJSONObject(nil));
@@ -1485,14 +1488,15 @@ begin
     end;
 
     // Extract function name before '('
-    Dec(ParenPos);
-    while (ParenPos > 0) and (Content[ParenPos] in [' ', #9, #10, #13]) do
-      Dec(ParenPos);
+    FuncNameEnd := ParenPos - 1;
+    while (FuncNameEnd > 0) and (Content[FuncNameEnd] in [' ', #9, #10, #13]) do
+      Dec(FuncNameEnd);
 
-    I := ParenPos;
-    while (I > 0) and (Content[I] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Dec(I);
-    FuncName := Copy(Content, I + 1, ParenPos - I);
+    FuncNameStart := FuncNameEnd;
+    while (FuncNameStart > 0) and (Content[FuncNameStart] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
+      Dec(FuncNameStart);
+    Inc(FuncNameStart);
+    FuncName := Copy(Content, FuncNameStart, FuncNameEnd - FuncNameStart + 1);
 
     if FuncName = '' then
     begin
@@ -1500,16 +1504,116 @@ begin
       Exit;
     end;
 
+    // Check if this is a member access (e.g., "Self.FindButton(")
+    IsMemberAccess := False;
+    DotPos := 0;
+    Expr := '';
+    I := FuncNameStart - 1;
+
+    // Skip whitespace before the function name
+    while (I >= 1) and (Content[I] in [' ', #9]) do
+      Dec(I);
+
+    // Check if there's a dot
+    if (I >= 1) and (Content[I] = '.') then
+    begin
+      IsMemberAccess := True;
+      DotPos := I;
+
+      // Extract the expression before the dot
+      Dec(I);
+      // Skip whitespace
+      while (I >= 1) and (Content[I] in [' ', #9]) do
+        Dec(I);
+
+      // Find the start of the expression (handle chained access like a.b.c)
+      ExprStart := I;
+      while (ExprStart >= 1) do
+      begin
+        Ch := Content[ExprStart];
+        if Ch in ['a'..'z', 'A'..'Z', '0'..'9', '_', '.', ')', ']'] then
+        begin
+          // Handle parentheses for function calls like Func().Method
+          if Ch = ')' then
+          begin
+            I := 1;
+            Dec(ExprStart);
+            while (ExprStart >= 1) and (I > 0) do
+            begin
+              if Content[ExprStart] = ')' then Inc(I)
+              else if Content[ExprStart] = '(' then Dec(I);
+              Dec(ExprStart);
+            end;
+          end
+          // Handle brackets for array access like Arr[0].Member
+          else if Ch = ']' then
+          begin
+            I := 1;
+            Dec(ExprStart);
+            while (ExprStart >= 1) and (I > 0) do
+            begin
+              if Content[ExprStart] = ']' then Inc(I)
+              else if Content[ExprStart] = '[' then Dec(I);
+              Dec(ExprStart);
+            end;
+          end
+          else
+            Dec(ExprStart);
+        end
+        else
+          Break;
+      end;
+      Inc(ExprStart);
+
+      Expr := Trim(Copy(Content, ExprStart, DotPos - ExprStart));
+    end;
+
     Codeinsight := TCodeinsight.Create;
     try
       Codeinsight.SetScript(Content, FilePath, CaretPos);
       Codeinsight.Run;
 
-      Decls := Codeinsight.Get(FuncName);
-      if (Length(Decls) > 0) and (Decls[0] is TDeclaration_Method) then
-      begin
-        Method := TDeclaration_Method(Decls[0]);
+      Method := nil;
 
+      if IsMemberAccess and (Expr <> '') then
+      begin
+        // Member access - resolve the expression and find the method
+        ExprDecl := Codeinsight.ParseExpr(Expr, Members);
+
+        if Assigned(ExprDecl) then
+        begin
+          // Resolve the type and get its members
+          if ExprDecl is TDeclaration_Var then
+            Members := Codeinsight.GetTypeMembers(
+              Codeinsight.ResolveVarType(TDeclaration_Var(ExprDecl).VarType))
+          else if (ExprDecl is TDeclaration_Method) and
+                  Assigned(TDeclaration_Method(ExprDecl).ResultType) then
+            Members := Codeinsight.GetTypeMembers(
+              Codeinsight.ResolveVarType(TDeclaration_Method(ExprDecl).ResultType))
+          else if ExprDecl is TDeclaration_Type then
+            Members := Codeinsight.GetTypeMembers(ExprDecl as TDeclaration_Type);
+
+          // Find the method by name in the type members
+          for Decl in Members do
+          begin
+            if (Decl is TDeclaration_Method) and SameText(Decl.Name, FuncName) then
+            begin
+              Method := TDeclaration_Method(Decl);
+              Break;
+            end;
+          end;
+        end;
+      end
+      else
+      begin
+        // Regular function call - look up directly
+        Decls := Codeinsight.Get(FuncName);
+        if (Length(Decls) > 0) and (Decls[0] is TDeclaration_Method) then
+          Method := TDeclaration_Method(Decls[0]);
+      end;
+
+      if Assigned(Method) then
+      begin
         SetLength(SigHelp.Signatures, 1);
         SigHelp.Signatures[0].LabelText := Method.Header;
         SigHelp.Signatures[0].Documentation := '';
