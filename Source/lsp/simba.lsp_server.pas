@@ -1589,12 +1589,12 @@ begin
           if SymCol < 0 then SymCol := 0;
 
           Symbol.Name := Decl.Name;
-          Symbol.Range := CreateRange(
-            SymLine, 0,
-            SymLine, 100
-          );
           Symbol.SelectionRange := CreateRange(
             SymLine, SymCol,
+            SymLine, SymCol + Length(Decl.Name)
+          );
+          Symbol.Range := CreateRange(
+            SymLine, 0,
             SymLine, SymCol + Length(Decl.Name)
           );
 
