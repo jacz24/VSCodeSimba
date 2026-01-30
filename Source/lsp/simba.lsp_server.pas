@@ -16,7 +16,9 @@ interface
 
 uses
   Classes, SysUtils, fpjson, jsonparser,
-  simba.lsp_types;
+  simba.lsp_types,
+  simba.ide_codetools_parser,
+  simba.ide_codetools_paslexer;
 
 type
   TSimbaLSPServer = class
@@ -89,12 +91,11 @@ implementation
 uses
   Math, Process,
   simba.ide_codetools_insight,
-  simba.ide_codetools_parser,
-  simba.ide_codetools_paslexer,
   simba.ide_codetools_base,
   simba.initializations,
   simba.env,
-  simba.simpleformatter;
+  simba.simpleformatter,
+  simba.lsp_utils;
 
 const
   // Lape/Simba keywords for autocompletion
@@ -567,107 +568,18 @@ begin
 end;
 
 function TSimbaLSPServer.CalculateCaretPosition(const Content: String; Line, Character: Integer): Integer;
-var
-  I, LineStart, LineNum: Integer;
 begin
-  Result := 0;
-  LineStart := 1;
-  LineNum := Line;
-  for I := 1 to Length(Content) do
-  begin
-    if LineNum = 0 then
-    begin
-      Result := LineStart + Character;
-      Break;
-    end;
-    if Content[I] = #10 then
-    begin
-      Dec(LineNum);
-      LineStart := I + 1;
-    end;
-  end;
-  if Result = 0 then
-    Result := LineStart + Character;
+  Result := LSPCalculateCaretPosition(Content, Line, Character);
 end;
 
 function TSimbaLSPServer.ExtractWordAtPosition(const Content: String; CaretPos: Integer; out WordStart, WordEnd: Integer): String;
 begin
-  WordStart := CaretPos;
-  WordEnd := CaretPos;
-  while (WordStart > 1) and (Content[WordStart - 1] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-    Dec(WordStart);
-  while (WordEnd <= Length(Content)) and (Content[WordEnd] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-    Inc(WordEnd);
-  Result := Copy(Content, WordStart, WordEnd - WordStart);
+  Result := LSPExtractWordAtPosition(Content, CaretPos, WordStart, WordEnd);
 end;
 
 function TSimbaLSPServer.ParseMemberAccessExpression(const Content: String; CaretPos: Integer; out Expr: String; out DotPos: Integer): Boolean;
-var
-  I, ExprStart, ParenDepth: Integer;
-  Ch: Char;
 begin
-  Result := False;
-  Expr := '';
-  DotPos := 0;
-  I := CaretPos - 1;
-
-  // Skip any partial identifier being typed
-  while (I >= 1) and (Content[I] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-    Dec(I);
-
-  // Check if there's a dot
-  if (I >= 1) and (Content[I] = '.') then
-  begin
-    Result := True;
-    DotPos := I;
-
-    // Extract the expression before the dot
-    Dec(I);
-    // Skip whitespace
-    while (I >= 1) and (Content[I] in [' ', #9]) do
-      Dec(I);
-
-    // Find the start of the expression (handle chained access like a.b.c)
-    ExprStart := I;
-    while (ExprStart >= 1) do
-    begin
-      Ch := Content[ExprStart];
-      if Ch in ['a'..'z', 'A'..'Z', '0'..'9', '_', '.', ')', ']'] then
-      begin
-        // Handle parentheses for function calls like Func().Member
-        if Ch = ')' then
-        begin
-          ParenDepth := 1;
-          Dec(ExprStart);
-          while (ExprStart >= 1) and (ParenDepth > 0) do
-          begin
-            if Content[ExprStart] = ')' then Inc(ParenDepth)
-            else if Content[ExprStart] = '(' then Dec(ParenDepth);
-            Dec(ExprStart);
-          end;
-        end
-        // Handle brackets for array access like Arr[0].Member
-        else if Ch = ']' then
-        begin
-          ParenDepth := 1;
-          Dec(ExprStart);
-          while (ExprStart >= 1) and (ParenDepth > 0) do
-          begin
-            if Content[ExprStart] = ']' then Inc(ParenDepth)
-            else if Content[ExprStart] = '[' then Dec(ParenDepth);
-            Dec(ExprStart);
-          end;
-        end
-        else
-          Dec(ExprStart);
-      end
-      else
-        Break;
-    end;
-    Inc(ExprStart);
-
-    Expr := Trim(Copy(Content, ExprStart, DotPos - ExprStart));
-  end;
+  Result := LSPParseMemberAccessExpression(Content, CaretPos, Expr, DotPos);
 end;
 
 function TSimbaLSPServer.GetCompletionItemKind(Decl: TDeclaration): TLSPCompletionItemKind;
