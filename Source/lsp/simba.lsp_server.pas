@@ -336,11 +336,14 @@ var
     SimbaExeName = 'Simba';
     {$ENDIF}
   var
-    ExePath: String;
+    ExePath, ExeName: String;
   begin
-    // Check if we ARE Simba (running with --lsp flag)
     ExePath := ParamStr(0);
-    if Pos('simba', LowerCase(ExtractFileName(ExePath))) > 0 then
+    ExeName := LowerCase(ExtractFileName(ExePath));
+
+    // Check if we ARE the full Simba (running with --lsp flag)
+    // But NOT if we're SimbaLSP (standalone LSP binary)
+    if (Pos('simba', ExeName) > 0) and (Pos('lsp', ExeName) = 0) then
       Exit(ExePath);
 
     // Check alongside this executable

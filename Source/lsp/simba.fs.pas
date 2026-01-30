@@ -22,6 +22,9 @@ type
     class function PathExtractName(Path: String): String;
     class function PathExtractNameWithoutExt(Path: String): String;
     class function PathExtractExt(Path: String): String;
+    class function PathJoin(Paths: array of String): String;
+    class function PathIncludeTrailingSep(Path: String): String;
+    class function PathExcludeTrailingSep(Path: String): String;
   end;
 
   TSimbaFile = class
@@ -50,6 +53,31 @@ end;
 class function TSimbaPath.PathExtractExt(Path: String): String;
 begin
   Result := ExtractFileExt(Path);
+end;
+
+class function TSimbaPath.PathJoin(Paths: array of String): String;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(Paths) do
+  begin
+    if (Paths[I] = '') then
+      Continue;
+    if (Result <> '') then
+      Result := IncludeTrailingPathDelimiter(Result);
+    Result := Result + Paths[I];
+  end;
+end;
+
+class function TSimbaPath.PathIncludeTrailingSep(Path: String): String;
+begin
+  Result := IncludeTrailingPathDelimiter(Path);
+end;
+
+class function TSimbaPath.PathExcludeTrailingSep(Path: String): String;
+begin
+  Result := ExcludeTrailingPathDelimiter(Path);
 end;
 
 class function TSimbaFile.FileExists(FileName: String): Boolean;
