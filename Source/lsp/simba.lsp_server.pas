@@ -17,6 +17,7 @@ interface
 uses
   Classes, SysUtils, fpjson, jsonparser,
   simba.lsp_types,
+  simba.lsp_workspace,
   simba.ide_codetools_parser,
   simba.ide_codetools_paslexer;
 
@@ -30,6 +31,7 @@ type
     FBaseDeclarations: String;
     FDiagnosticErrors: TStringList;
     FDiagnosticURI: String;
+    FWorkspaceIndex: TWorkspaceIndex;
 
     procedure LogMessage(const Msg: String);
     procedure SendResponse(const ID: TJSONData; const Result: TJSONData);
@@ -169,6 +171,7 @@ begin
   FDocuments.OwnsObjects := False;
   FDiagnosticErrors := TStringList.Create;
   FDiagnosticURI := '';
+  FWorkspaceIndex := TWorkspaceIndex.Create;
   FInitialized := False;
   FShutdown := False;
   FSimbaPath := '';
@@ -185,6 +188,7 @@ begin
   for I := 0 to FDocuments.Count - 1 do
     TStringList(FDocuments.Objects[I]).Free;
   FDocuments.Free;
+  FWorkspaceIndex.Free;
   FDiagnosticErrors.Free;
   inherited Destroy;
 end;
@@ -661,7 +665,17 @@ var
   TriggerChars, TokenTypes, TokenModifiers: TJSONArray;
   TokenType: TLSPSemanticTokenType;
   TokenMod: TLSPSemanticTokenModifier;
+  RootUri, RootPath: String;
 begin
+  // Extract workspace root from initialize params
+  RootUri := Params.Get('rootUri', '');
+  if RootUri <> '' then
+  begin
+    RootPath := URIToFilePath(RootUri);
+    FWorkspaceIndex.SetWorkspaceRoot(RootPath);
+    LogMessage('Workspace root: ' + RootPath);
+  end;
+
   Result := TJSONObject.Create;
   Capabilities := TJSONObject.Create;
   try
@@ -2079,16 +2093,21 @@ var
   DocIdx: Integer;
   URI, FilePath, Content: String;
   Codeinsight: TCodeinsight;
+  OpenDocPaths: TStringList;
+  WorkspaceResults: TWorkspaceCachedDeclArray;
+  WDecl: TWorkspaceCachedDecl;
 begin
   Query := Params.Get('query', '');
 
   Symbols := TJSONArray.Create;
+  OpenDocPaths := TStringList.Create;
   try
-    // Search through all open documents
+    // 1. Search through all open documents (existing behavior)
     for DocIdx := 0 to FDocuments.Count - 1 do
     begin
       URI := FDocuments[DocIdx];
       FilePath := URIToFilePath(URI);
+      OpenDocPaths.Add(FilePath);  // Track open docs
       Content := TStringList(FDocuments.Objects[DocIdx]).Text;
 
       Codeinsight := TCodeinsight.Create;
@@ -2100,7 +2119,6 @@ begin
         for I := 0 to High(Decls) do
         begin
           Decl := Decls[I];
-          // Filter by query if provided
           if (Query = '') or (Pos(LowerCase(Query), LowerCase(Decl.Name)) > 0) then
           begin
             if (Decl.Name <> '') and (Decl.DocPos.FileName = FilePath) then
@@ -2128,12 +2146,50 @@ begin
               Symbol.Add('location', SymLoc);
 
               Symbols.Add(Symbol);
+
+              if Symbols.Count >= 100 then
+                Break;
             end;
           end;
         end;
 
       finally
         Codeinsight.Free;
+      end;
+
+      if Symbols.Count >= 100 then
+        Break;
+    end;
+
+    // 2. Search workspace files not already open
+    if (Symbols.Count < 100) and (FWorkspaceIndex.WorkspaceRoot <> '') then
+    begin
+      WorkspaceResults := FWorkspaceIndex.Search(Query);
+
+      for I := 0 to High(WorkspaceResults) do
+      begin
+        WDecl := WorkspaceResults[I];
+
+        // Skip if file is already open (already searched above)
+        if OpenDocPaths.IndexOf(WDecl.FilePath) >= 0 then
+          Continue;
+
+        Symbol := TJSONObject.Create;
+        Symbol.Add('name', WDecl.Name);
+        Symbol.Add('kind', WDecl.Kind);
+
+        SymLoc := TJSONObject.Create;
+        SymLoc.Add('uri', FilePathToURI(WDecl.FilePath));
+        SymRange := TJSONObject.Create;
+        SymRange.Add('start', TJSONObject.Create(['line', Max(0, WDecl.Line - 1), 'character', Max(0, WDecl.Col - 1)]));
+        SymRange.Add('end', TJSONObject.Create(['line', Max(0, WDecl.Line - 1), 'character', Max(0, WDecl.Col - 1) + Length(WDecl.Name)]));
+        SymLoc.Add('range', SymRange);
+        Symbol.Add('location', SymLoc);
+
+        Symbols.Add(Symbol);
+
+        if Symbols.Count >= 100 then
+          Break;
       end;
     end;
 
@@ -2145,6 +2201,8 @@ begin
       SendResponse(ID, TJSONArray.Create);
     end;
   end;
+
+  OpenDocPaths.Free;
 end;
 
 procedure TSimbaLSPServer.Run;
