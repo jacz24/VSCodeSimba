@@ -62,6 +62,13 @@ type
     function GetDocumentContent(const URI: String): String;
     procedure SetDocumentContent(const URI: String; const Content: String);
 
+    // Helper methods to reduce code duplication
+    function CalculateCaretPosition(const Content: String; Line, Character: Integer): Integer;
+    function ExtractWordAtPosition(const Content: String; CaretPos: Integer; out WordStart, WordEnd: Integer): String;
+    function ParseMemberAccessExpression(const Content: String; CaretPos: Integer; out Expr: String; out DotPos: Integer): Boolean;
+    function GetCompletionItemKind(Decl: TDeclaration): TLSPCompletionItemKind;
+    function CreateLocationResponse(const URI, FilePath, Word: String; const DocPos: TDocPos): TJSONData;
+
     procedure SetupKeywords;
     procedure LoadBaseDeclarations;
     procedure RunDiagnostics(const URI: String);
@@ -559,6 +566,179 @@ begin
   end;
 end;
 
+function TSimbaLSPServer.CalculateCaretPosition(const Content: String; Line, Character: Integer): Integer;
+var
+  I, LineStart, LineNum: Integer;
+begin
+  Result := 0;
+  LineStart := 1;
+  LineNum := Line;
+  for I := 1 to Length(Content) do
+  begin
+    if LineNum = 0 then
+    begin
+      Result := LineStart + Character;
+      Break;
+    end;
+    if Content[I] = #10 then
+    begin
+      Dec(LineNum);
+      LineStart := I + 1;
+    end;
+  end;
+  if Result = 0 then
+    Result := LineStart + Character;
+end;
+
+function TSimbaLSPServer.ExtractWordAtPosition(const Content: String; CaretPos: Integer; out WordStart, WordEnd: Integer): String;
+begin
+  WordStart := CaretPos;
+  WordEnd := CaretPos;
+  while (WordStart > 1) and (Content[WordStart - 1] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
+    Dec(WordStart);
+  while (WordEnd <= Length(Content)) and (Content[WordEnd] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
+    Inc(WordEnd);
+  Result := Copy(Content, WordStart, WordEnd - WordStart);
+end;
+
+function TSimbaLSPServer.ParseMemberAccessExpression(const Content: String; CaretPos: Integer; out Expr: String; out DotPos: Integer): Boolean;
+var
+  I, ExprStart, ParenDepth: Integer;
+  Ch: Char;
+begin
+  Result := False;
+  Expr := '';
+  DotPos := 0;
+  I := CaretPos - 1;
+
+  // Skip any partial identifier being typed
+  while (I >= 1) and (Content[I] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
+    Dec(I);
+
+  // Check if there's a dot
+  if (I >= 1) and (Content[I] = '.') then
+  begin
+    Result := True;
+    DotPos := I;
+
+    // Extract the expression before the dot
+    Dec(I);
+    // Skip whitespace
+    while (I >= 1) and (Content[I] in [' ', #9]) do
+      Dec(I);
+
+    // Find the start of the expression (handle chained access like a.b.c)
+    ExprStart := I;
+    while (ExprStart >= 1) do
+    begin
+      Ch := Content[ExprStart];
+      if Ch in ['a'..'z', 'A'..'Z', '0'..'9', '_', '.', ')', ']'] then
+      begin
+        // Handle parentheses for function calls like Func().Member
+        if Ch = ')' then
+        begin
+          ParenDepth := 1;
+          Dec(ExprStart);
+          while (ExprStart >= 1) and (ParenDepth > 0) do
+          begin
+            if Content[ExprStart] = ')' then Inc(ParenDepth)
+            else if Content[ExprStart] = '(' then Dec(ParenDepth);
+            Dec(ExprStart);
+          end;
+        end
+        // Handle brackets for array access like Arr[0].Member
+        else if Ch = ']' then
+        begin
+          ParenDepth := 1;
+          Dec(ExprStart);
+          while (ExprStart >= 1) and (ParenDepth > 0) do
+          begin
+            if Content[ExprStart] = ']' then Inc(ParenDepth)
+            else if Content[ExprStart] = '[' then Dec(ParenDepth);
+            Dec(ExprStart);
+          end;
+        end
+        else
+          Dec(ExprStart);
+      end
+      else
+        Break;
+    end;
+    Inc(ExprStart);
+
+    Expr := Trim(Copy(Content, ExprStart, DotPos - ExprStart));
+  end;
+end;
+
+function TSimbaLSPServer.GetCompletionItemKind(Decl: TDeclaration): TLSPCompletionItemKind;
+begin
+  if Decl is TDeclaration_Method then
+    Result := cikFunction
+  else if Decl is TDeclaration_Type then
+    Result := cikClass
+  else if Decl is TDeclaration_Const then
+    Result := cikConstant
+  else if Decl is TDeclaration_EnumElement then
+    Result := cikEnumMember
+  else if Decl is TDeclaration_Field then
+    Result := cikField
+  else if Decl is TDeclaration_Property then
+    Result := cikProperty
+  else
+    Result := cikVariable;
+end;
+
+function TSimbaLSPServer.CreateLocationResponse(const URI, FilePath, Word: String; const DocPos: TDocPos): TJSONData;
+var
+  Location: TLSPLocation;
+  IsSameFile: Boolean;
+begin
+  // Check if we have valid file position info
+  if (DocPos.FileName = '') or (DocPos.Line <= 0) then
+  begin
+    // Built-in declaration without file position - show info in output
+    LogMessage('Declared in: ' + FormatDeclaredIn(DocPos.FileName));
+    Result := TJSONNull.Create;
+    Exit;
+  end;
+
+  // Check if declaration is in the same file (case-insensitive on Windows)
+  {$IFDEF WINDOWS}
+  IsSameFile := SameText(DocPos.FileName, FilePath);
+  {$ELSE}
+  IsSameFile := (DocPos.FileName = FilePath);
+  {$ENDIF}
+
+  if IsSameFile then
+  begin
+    Location.URI := URI;
+    Location.Range := CreateRange(
+      DocPos.Line - 1,
+      Max(0, DocPos.Col - 1),
+      DocPos.Line - 1,
+      Max(0, DocPos.Col - 1) + Length(Word)
+    );
+    Result := LocationToJSON(Location);
+  end
+  else if FileExists(DocPos.FileName) then
+  begin
+    Location.URI := FilePathToURI(DocPos.FileName);
+    Location.Range := CreateRange(
+      DocPos.Line - 1,
+      Max(0, DocPos.Col - 1),
+      DocPos.Line - 1,
+      Max(0, DocPos.Col - 1) + Length(Word)
+    );
+    Result := LocationToJSON(Location);
+  end
+  else
+  begin
+    // File doesn't exist (built-in declaration) - show info in output
+    LogMessage('Declared in: ' + FormatDeclaredIn(DocPos.FileName));
+    Result := TJSONNull.Create;
+  end;
+end;
+
 procedure TSimbaLSPServer.HandleInitialize(const ID: TJSONData; const Params: TJSONObject);
 var
   Result, Capabilities, CompletionProvider, SignatureProvider: TJSONObject;
@@ -734,21 +914,22 @@ end;
 
 procedure TSimbaLSPServer.HandleTextDocumentDidSave(const Params: TJSONObject);
 begin
-  // Nothing to do - we already have the content from didChange
+  // No action needed - document content is already synchronized via didChange events.
+  // This handler exists because the LSP protocol requires acknowledging save notifications,
+  // but we use full document sync mode so content is always up-to-date.
 end;
 
 procedure TSimbaLSPServer.HandleTextDocumentCompletion(const ID: TJSONData; const Params: TJSONObject);
 var
   TextDocument, Position: TJSONObject;
   URI, Content, FilePath, Expr: String;
-  Line, Character, CaretPos, I, LineStart, ExprStart, DotPos: Integer;
+  Line, Character, CaretPos, I, DotPos: Integer;
   Codeinsight: TCodeinsight;
   Decls, Members: TDeclarationArray;
   Items: TJSONArray;
   Item: TLSPCompletionItem;
   Decl, ExprDecl: TDeclaration;
   IsMemberCompletion: Boolean;
-  Ch: Char;
 begin
   TextDocument := Params.Get('textDocument', TJSONObject(nil));
   Position := Params.Get('position', TJSONObject(nil));
@@ -767,91 +948,9 @@ begin
 
   Items := TJSONArray.Create;
   try
-    // Calculate caret position in the content
-    CaretPos := 0;
-    LineStart := 1;
-    for I := 1 to Length(Content) do
-    begin
-      if Line = 0 then
-      begin
-        CaretPos := LineStart + Character;
-        Break;
-      end;
-      if Content[I] = #10 then
-      begin
-        Dec(Line);
-        LineStart := I + 1;
-      end;
-    end;
-    if CaretPos = 0 then
-      CaretPos := LineStart + Character;
+    CaretPos := CalculateCaretPosition(Content, Line, Character);
+    IsMemberCompletion := ParseMemberAccessExpression(Content, CaretPos, Expr, DotPos);
 
-    // Check if this is member completion (e.g., "Antiban." or "Antiban.Do")
-    // Look backwards from cursor to find a dot
-    IsMemberCompletion := False;
-    DotPos := 0;
-    I := CaretPos - 1;
-
-    // Skip any partial identifier being typed
-    while (I >= 1) and (Content[I] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Dec(I);
-
-    // Check if there's a dot
-    if (I >= 1) and (Content[I] = '.') then
-    begin
-      IsMemberCompletion := True;
-      DotPos := I;
-
-      // Extract the expression before the dot
-      Dec(I);
-      // Skip whitespace
-      while (I >= 1) and (Content[I] in [' ', #9]) do
-        Dec(I);
-
-      // Find the start of the expression (handle chained access like a.b.c)
-      ExprStart := I;
-      while (ExprStart >= 1) do
-      begin
-        Ch := Content[ExprStart];
-        if Ch in ['a'..'z', 'A'..'Z', '0'..'9', '_', '.', ')', ']'] then
-        begin
-          // Handle parentheses for function calls like Func().Member
-          if Ch = ')' then
-          begin
-            // Skip back to matching '('
-            I := 1;
-            Dec(ExprStart);
-            while (ExprStart >= 1) and (I > 0) do
-            begin
-              if Content[ExprStart] = ')' then Inc(I)
-              else if Content[ExprStart] = '(' then Dec(I);
-              Dec(ExprStart);
-            end;
-          end
-          // Handle brackets for array access like Arr[0].Member
-          else if Ch = ']' then
-          begin
-            I := 1;
-            Dec(ExprStart);
-            while (ExprStart >= 1) and (I > 0) do
-            begin
-              if Content[ExprStart] = ']' then Inc(I)
-              else if Content[ExprStart] = '[' then Dec(I);
-              Dec(ExprStart);
-            end;
-          end
-          else
-            Dec(ExprStart);
-        end
-        else
-          Break;
-      end;
-      Inc(ExprStart);
-
-      Expr := Trim(Copy(Content, ExprStart, DotPos - ExprStart));
-    end;
-
-    // Create codeinsight and get completions
     Codeinsight := TCodeinsight.Create;
     try
       Codeinsight.SetScript(Content, FilePath, CaretPos);
@@ -885,22 +984,7 @@ begin
             Item.Detail := Decl.Header;
             Item.Documentation := '';
             Item.InsertText := Decl.Name;
-
-            if Decl is TDeclaration_Method then
-              Item.Kind := cikFunction
-            else if Decl is TDeclaration_Type then
-              Item.Kind := cikClass
-            else if Decl is TDeclaration_Const then
-              Item.Kind := cikConstant
-            else if Decl is TDeclaration_EnumElement then
-              Item.Kind := cikEnumMember
-            else if Decl is TDeclaration_Field then
-              Item.Kind := cikField
-            else if Decl is TDeclaration_Property then
-              Item.Kind := cikProperty
-            else
-              Item.Kind := cikVariable;
-
+            Item.Kind := GetCompletionItemKind(Decl);
             Items.Add(CompletionItemToJSON(Item));
           end;
         end;
@@ -918,18 +1002,7 @@ begin
             Item.Detail := Decl.Header;
             Item.Documentation := '';
             Item.InsertText := Decl.Name;
-
-            if Decl is TDeclaration_Method then
-              Item.Kind := cikFunction
-            else if Decl is TDeclaration_Type then
-              Item.Kind := cikClass
-            else if Decl is TDeclaration_Const then
-              Item.Kind := cikConstant
-            else if Decl is TDeclaration_EnumElement then
-              Item.Kind := cikEnumMember
-            else
-              Item.Kind := cikVariable;
-
+            Item.Kind := GetCompletionItemKind(Decl);
             Items.Add(CompletionItemToJSON(Item));
           end;
         end;
@@ -944,18 +1017,7 @@ begin
             Item.Detail := Decl.Header;
             Item.Documentation := '';
             Item.InsertText := Decl.Name;
-
-            if Decl is TDeclaration_Method then
-              Item.Kind := cikFunction
-            else if Decl is TDeclaration_Type then
-              Item.Kind := cikClass
-            else if Decl is TDeclaration_Const then
-              Item.Kind := cikConstant
-            else if Decl is TDeclaration_EnumElement then
-              Item.Kind := cikEnumMember
-            else
-              Item.Kind := cikVariable;
-
+            Item.Kind := GetCompletionItemKind(Decl);
             Items.Add(CompletionItemToJSON(Item));
           end;
         end;
@@ -990,11 +1052,10 @@ procedure TSimbaLSPServer.HandleTextDocumentHover(const ID: TJSONData; const Par
 var
   TextDocument, Position: TJSONObject;
   URI, Content, FilePath, Word: String;
-  Line, Character, CaretPos, I, LineStart, WordStart, WordEnd: Integer;
+  Line, Character, CaretPos, WordStart, WordEnd: Integer;
   Codeinsight: TCodeinsight;
   Decls: TDeclarationArray;
   Hover: TLSPHover;
-  HoverResult: TJSONObject;
 begin
   TextDocument := Params.Get('textDocument', TJSONObject(nil));
   Position := Params.Get('position', TJSONObject(nil));
@@ -1012,33 +1073,8 @@ begin
   FilePath := URIToFilePath(URI);
 
   try
-    // Calculate caret position
-    CaretPos := 0;
-    LineStart := 1;
-    for I := 1 to Length(Content) do
-    begin
-      if Line = 0 then
-      begin
-        CaretPos := LineStart + Character;
-        Break;
-      end;
-      if Content[I] = #10 then
-      begin
-        Dec(Line);
-        LineStart := I + 1;
-      end;
-    end;
-    if CaretPos = 0 then
-      CaretPos := LineStart + Character;
-
-    // Extract word at position
-    WordStart := CaretPos;
-    WordEnd := CaretPos;
-    while (WordStart > 1) and (Content[WordStart - 1] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Dec(WordStart);
-    while (WordEnd <= Length(Content)) and (Content[WordEnd] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Inc(WordEnd);
-    Word := Copy(Content, WordStart, WordEnd - WordStart);
+    CaretPos := CalculateCaretPosition(Content, Line, Character);
+    Word := ExtractWordAtPosition(Content, CaretPos, WordStart, WordEnd);
 
     if Word = '' then
     begin
@@ -1056,9 +1092,9 @@ begin
       begin
         Hover.Contents := '```simba' + LineEnding + Decls[0].Header + LineEnding + '```';
         Hover.Range := CreateRange(
-          Position.Get('line', 0),
+          Line,
           Character - (CaretPos - WordStart),
-          Position.Get('line', 0),
+          Line,
           Character + (WordEnd - CaretPos)
         );
         SendResponse(ID, HoverToJSON(Hover));
@@ -1083,13 +1119,12 @@ procedure TSimbaLSPServer.HandleTextDocumentDefinition(const ID: TJSONData; cons
 var
   TextDocument, Position: TJSONObject;
   URI, Content, FilePath, Word, Expr: String;
-  Line, Character, CaretPos, I, LineStart, WordStart, WordEnd, DotPos, ExprStart: Integer;
+  Line, Character, CaretPos, I, WordStart, WordEnd, DotPos: Integer;
   Codeinsight: TCodeinsight;
   Decls, Members: TDeclarationArray;
-  Location: TLSPLocation;
   IsMemberAccess: Boolean;
   ExprDecl, MemberDecl, Decl: TDeclaration;
-  Ch: Char;
+  Response: TJSONData;
 begin
   TextDocument := Params.Get('textDocument', TJSONObject(nil));
   Position := Params.Get('position', TJSONObject(nil));
@@ -1107,33 +1142,8 @@ begin
   FilePath := URIToFilePath(URI);
 
   try
-    // Calculate caret position
-    CaretPos := 0;
-    LineStart := 1;
-    for I := 1 to Length(Content) do
-    begin
-      if Line = 0 then
-      begin
-        CaretPos := LineStart + Character;
-        Break;
-      end;
-      if Content[I] = #10 then
-      begin
-        Dec(Line);
-        LineStart := I + 1;
-      end;
-    end;
-    if CaretPos = 0 then
-      CaretPos := LineStart + Character;
-
-    // Extract word at position
-    WordStart := CaretPos;
-    WordEnd := CaretPos;
-    while (WordStart > 1) and (Content[WordStart - 1] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Dec(WordStart);
-    while (WordEnd <= Length(Content)) and (Content[WordEnd] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Inc(WordEnd);
-    Word := Copy(Content, WordStart, WordEnd - WordStart);
+    CaretPos := CalculateCaretPosition(Content, Line, Character);
+    Word := ExtractWordAtPosition(Content, CaretPos, WordStart, WordEnd);
 
     if Word = '' then
     begin
@@ -1142,68 +1152,7 @@ begin
     end;
 
     // Check if this is a member access (e.g., "Antiban.Zoom" with cursor on "Zoom")
-    // Look backwards from the word start to find a dot
-    IsMemberAccess := False;
-    DotPos := 0;
-    I := WordStart - 1;
-
-    // Skip whitespace before the word
-    while (I >= 1) and (Content[I] in [' ', #9]) do
-      Dec(I);
-
-    // Check if there's a dot
-    if (I >= 1) and (Content[I] = '.') then
-    begin
-      IsMemberAccess := True;
-      DotPos := I;
-
-      // Extract the expression before the dot
-      Dec(I);
-      // Skip whitespace
-      while (I >= 1) and (Content[I] in [' ', #9]) do
-        Dec(I);
-
-      // Find the start of the expression (handle chained access like a.b.c)
-      ExprStart := I;
-      while (ExprStart >= 1) do
-      begin
-        Ch := Content[ExprStart];
-        if Ch in ['a'..'z', 'A'..'Z', '0'..'9', '_', '.', ')', ']'] then
-        begin
-          // Handle parentheses for function calls like Func().Member
-          if Ch = ')' then
-          begin
-            I := 1;
-            Dec(ExprStart);
-            while (ExprStart >= 1) and (I > 0) do
-            begin
-              if Content[ExprStart] = ')' then Inc(I)
-              else if Content[ExprStart] = '(' then Dec(I);
-              Dec(ExprStart);
-            end;
-          end
-          // Handle brackets for array access like Arr[0].Member
-          else if Ch = ']' then
-          begin
-            I := 1;
-            Dec(ExprStart);
-            while (ExprStart >= 1) and (I > 0) do
-            begin
-              if Content[ExprStart] = ']' then Inc(I)
-              else if Content[ExprStart] = '[' then Dec(I);
-              Dec(ExprStart);
-            end;
-          end
-          else
-            Dec(ExprStart);
-        end
-        else
-          Break;
-      end;
-      Inc(ExprStart);
-
-      Expr := Trim(Copy(Content, ExprStart, DotPos - ExprStart));
-    end;
+    IsMemberAccess := ParseMemberAccessExpression(Content, WordStart, Expr, DotPos);
 
     Codeinsight := TCodeinsight.Create;
     try
@@ -1241,64 +1190,16 @@ begin
           end;
         end;
 
-        // If we found the member, return its location (only if file exists)
-        if Assigned(MemberDecl) and (MemberDecl.DocPos.FileName <> '') and
-           (MemberDecl.DocPos.Line > 0) then
+        // If we found the member, return its location
+        if Assigned(MemberDecl) then
         begin
-          // Check if file exists (built-in declarations have section names like "Base" which aren't real files)
-          {$IFDEF WINDOWS}
-          if SameText(MemberDecl.DocPos.FileName, FilePath) then
+          Response := CreateLocationResponse(URI, FilePath, Word, MemberDecl.DocPos);
+          if not (Response is TJSONNull) then
           begin
-            Location.URI := URI;
-            Location.Range := CreateRange(
-              MemberDecl.DocPos.Line - 1,
-              Max(0, MemberDecl.DocPos.Col - 1),
-              MemberDecl.DocPos.Line - 1,
-              Max(0, MemberDecl.DocPos.Col - 1) + Length(Word)
-            );
-            SendResponse(ID, LocationToJSON(Location));
-            Exit;
-          end
-          else if FileExists(MemberDecl.DocPos.FileName) then
-          begin
-            Location.URI := FilePathToURI(MemberDecl.DocPos.FileName);
-            Location.Range := CreateRange(
-              MemberDecl.DocPos.Line - 1,
-              Max(0, MemberDecl.DocPos.Col - 1),
-              MemberDecl.DocPos.Line - 1,
-              Max(0, MemberDecl.DocPos.Col - 1) + Length(Word)
-            );
-            SendResponse(ID, LocationToJSON(Location));
+            SendResponse(ID, Response);
             Exit;
           end;
-          {$ELSE}
-          if MemberDecl.DocPos.FileName = FilePath then
-          begin
-            Location.URI := URI;
-            Location.Range := CreateRange(
-              MemberDecl.DocPos.Line - 1,
-              Max(0, MemberDecl.DocPos.Col - 1),
-              MemberDecl.DocPos.Line - 1,
-              Max(0, MemberDecl.DocPos.Col - 1) + Length(Word)
-            );
-            SendResponse(ID, LocationToJSON(Location));
-            Exit;
-          end
-          else if FileExists(MemberDecl.DocPos.FileName) then
-          begin
-            Location.URI := FilePathToURI(MemberDecl.DocPos.FileName);
-            Location.Range := CreateRange(
-              MemberDecl.DocPos.Line - 1,
-              Max(0, MemberDecl.DocPos.Col - 1),
-              MemberDecl.DocPos.Line - 1,
-              Max(0, MemberDecl.DocPos.Col - 1) + Length(Word)
-            );
-            SendResponse(ID, LocationToJSON(Location));
-            Exit;
-          end;
-          {$ENDIF}
-          // File doesn't exist (built-in declaration) - show info in output
-          LogMessage('Declared in: ' + FormatDeclaredIn(MemberDecl.DocPos.FileName));
+          Response.Free;
           LogMessage('Declaration: ' + MemberDecl.Header);
           SendResponse(ID, TJSONNull.Create);
           Exit;
@@ -1332,76 +1233,12 @@ begin
           end;
         end;
 
-        // Check if we have valid file position info
-        if (Decl.DocPos.FileName <> '') and (Decl.DocPos.Line > 0) then
-        begin
-          // Check if declaration is in the same file (case-insensitive on Windows)
-          {$IFDEF WINDOWS}
-          if SameText(Decl.DocPos.FileName, FilePath) then
-          begin
-            Location.URI := URI;  // Use original URI to preserve exact path
-            Location.Range := CreateRange(
-              Decl.DocPos.Line - 1,
-              Max(0, Decl.DocPos.Col - 1),
-              Decl.DocPos.Line - 1,
-              Max(0, Decl.DocPos.Col - 1) + Length(Word)
-            );
-            SendResponse(ID, LocationToJSON(Location));
-          end
-          else if FileExists(Decl.DocPos.FileName) then
-          begin
-            Location.URI := FilePathToURI(Decl.DocPos.FileName);
-            Location.Range := CreateRange(
-              Decl.DocPos.Line - 1,
-              Max(0, Decl.DocPos.Col - 1),
-              Decl.DocPos.Line - 1,
-              Max(0, Decl.DocPos.Col - 1) + Length(Word)
-            );
-            SendResponse(ID, LocationToJSON(Location));
-          end
-          else
-          begin
-            // File doesn't exist (built-in declaration) - show info in output
-            LogMessage('Declared in: ' + FormatDeclaredIn(Decl.DocPos.FileName));
-            LogMessage('Declaration: ' + Decl.Header);
-            SendResponse(ID, TJSONNull.Create);
-          end;
-          {$ELSE}
-          if Decl.DocPos.FileName = FilePath then
-          begin
-            Location.URI := URI;
-            Location.Range := CreateRange(
-              Decl.DocPos.Line - 1,
-              Max(0, Decl.DocPos.Col - 1),
-              Decl.DocPos.Line - 1,
-              Max(0, Decl.DocPos.Col - 1) + Length(Word)
-            );
-            SendResponse(ID, LocationToJSON(Location));
-          end
-          else if FileExists(Decl.DocPos.FileName) then
-          begin
-            Location.URI := FilePathToURI(Decl.DocPos.FileName);
-            Location.Range := CreateRange(
-              Decl.DocPos.Line - 1,
-              Max(0, Decl.DocPos.Col - 1),
-              Decl.DocPos.Line - 1,
-              Max(0, Decl.DocPos.Col - 1) + Length(Word)
-            );
-            SendResponse(ID, LocationToJSON(Location));
-          end
-          else
-          begin
-            // File doesn't exist (built-in declaration) - show info in output
-            LogMessage('Declared in: ' + FormatDeclaredIn(Decl.DocPos.FileName));
-            LogMessage('Declaration: ' + Decl.Header);
-            SendResponse(ID, TJSONNull.Create);
-          end;
-          {$ENDIF}
-        end
+        Response := CreateLocationResponse(URI, FilePath, Word, Decl.DocPos);
+        if not (Response is TJSONNull) then
+          SendResponse(ID, Response)
         else
         begin
-          // Built-in declaration without file position - show info in output
-          LogMessage('Declared in: ' + FormatDeclaredIn(Decl.DocPos.FileName));
+          Response.Free;
           LogMessage('Declaration: ' + Decl.Header);
           SendResponse(ID, TJSONNull.Create);
         end;
@@ -1426,7 +1263,7 @@ procedure TSimbaLSPServer.HandleTextDocumentSignatureHelp(const ID: TJSONData; c
 var
   TextDocument, Position: TJSONObject;
   URI, Content, FilePath, FuncName, Expr: String;
-  Line, Character, CaretPos, I, LineStart, ParenPos, ParamIndex: Integer;
+  Line, Character, CaretPos, I, ParenPos, ParamIndex: Integer;
   DotPos, ExprStart, FuncNameStart, FuncNameEnd: Integer;
   IsMemberAccess: Boolean;
   Ch: Char;
@@ -1452,24 +1289,7 @@ begin
   FilePath := URIToFilePath(URI);
 
   try
-    // Calculate caret position
-    CaretPos := 0;
-    LineStart := 1;
-    for I := 1 to Length(Content) do
-    begin
-      if Line = 0 then
-      begin
-        CaretPos := LineStart + Character;
-        Break;
-      end;
-      if Content[I] = #10 then
-      begin
-        Dec(Line);
-        LineStart := I + 1;
-      end;
-    end;
-    if CaretPos = 0 then
-      CaretPos := LineStart + Character;
+    CaretPos := CalculateCaretPosition(Content, Line, Character);
 
     // Find the function name by looking backwards for '('
     ParenPos := CaretPos;
@@ -1997,10 +1817,9 @@ procedure TSimbaLSPServer.HandleTextDocumentReferences(const ID: TJSONData; cons
 var
   TextDocument, Position: TJSONObject;
   URI, Content, FilePath, Word: String;
-  Line, Character, CaretPos, I, LineStart, WordStart, WordEnd: Integer;
+  Line, Character, CaretPos, WordStart, WordEnd: Integer;
   Codeinsight: TCodeinsight;
   Decls: TDeclarationArray;
-  Decl: TDeclaration;
   Locations: TJSONArray;
   Lexer: TPasLexer;
   Location: TJSONObject;
@@ -2023,33 +1842,8 @@ begin
 
   Locations := TJSONArray.Create;
   try
-    // Calculate caret position
-    CaretPos := 0;
-    LineStart := 1;
-    for I := 1 to Length(Content) do
-    begin
-      if Line = 0 then
-      begin
-        CaretPos := LineStart + Character;
-        Break;
-      end;
-      if Content[I] = #10 then
-      begin
-        Dec(Line);
-        LineStart := I + 1;
-      end;
-    end;
-    if CaretPos = 0 then
-      CaretPos := LineStart + Character;
-
-    // Extract word at position
-    WordStart := CaretPos;
-    WordEnd := CaretPos;
-    while (WordStart > 1) and (Content[WordStart - 1] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Dec(WordStart);
-    while (WordEnd <= Length(Content)) and (Content[WordEnd] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Inc(WordEnd);
-    Word := Copy(Content, WordStart, WordEnd - WordStart);
+    CaretPos := CalculateCaretPosition(Content, Line, Character);
+    Word := ExtractWordAtPosition(Content, CaretPos, WordStart, WordEnd);
 
     if Word = '' then
     begin
@@ -2159,10 +1953,7 @@ begin
               FoldRange := TJSONObject.Create;
               FoldRange.Add('startLine', StartLine);
               FoldRange.Add('endLine', EndLine);
-              if Decl is TDeclaration_Method then
-                FoldRange.Add('kind', 'region')
-              else
-                FoldRange.Add('kind', 'region');
+              FoldRange.Add('kind', 'region');
               Ranges.Add(FoldRange);
             end;
           end;
@@ -2187,7 +1978,7 @@ procedure TSimbaLSPServer.HandleTextDocumentRename(const ID: TJSONData; const Pa
 var
   TextDocument, Position: TJSONObject;
   URI, Content, FilePath, Word, NewName: String;
-  Line, Character, CaretPos, I, LineStart, WordStart, WordEnd: Integer;
+  Line, Character, CaretPos, WordStart, WordEnd: Integer;
   Codeinsight: TCodeinsight;
   Decls: TDeclarationArray;
   Lexer: TPasLexer;
@@ -2212,33 +2003,8 @@ begin
   FilePath := URIToFilePath(URI);
 
   try
-    // Calculate caret position
-    CaretPos := 0;
-    LineStart := 1;
-    for I := 1 to Length(Content) do
-    begin
-      if Line = 0 then
-      begin
-        CaretPos := LineStart + Character;
-        Break;
-      end;
-      if Content[I] = #10 then
-      begin
-        Dec(Line);
-        LineStart := I + 1;
-      end;
-    end;
-    if CaretPos = 0 then
-      CaretPos := LineStart + Character;
-
-    // Extract word at position
-    WordStart := CaretPos;
-    WordEnd := CaretPos;
-    while (WordStart > 1) and (Content[WordStart - 1] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Dec(WordStart);
-    while (WordEnd <= Length(Content)) and (Content[WordEnd] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Inc(WordEnd);
-    Word := Copy(Content, WordStart, WordEnd - WordStart);
+    CaretPos := CalculateCaretPosition(Content, Line, Character);
+    Word := ExtractWordAtPosition(Content, CaretPos, WordStart, WordEnd);
 
     if Word = '' then
     begin
@@ -2307,7 +2073,7 @@ procedure TSimbaLSPServer.HandleTextDocumentTypeDefinition(const ID: TJSONData; 
 var
   TextDocument, Position: TJSONObject;
   URI, Content, FilePath, Word: String;
-  Line, Character, CaretPos, I, LineStart, WordStart, WordEnd: Integer;
+  Line, Character, CaretPos, WordStart, WordEnd: Integer;
   Codeinsight: TCodeinsight;
   Decls: TDeclarationArray;
   Decl: TDeclaration;
@@ -2330,33 +2096,8 @@ begin
   FilePath := URIToFilePath(URI);
 
   try
-    // Calculate caret position
-    CaretPos := 0;
-    LineStart := 1;
-    for I := 1 to Length(Content) do
-    begin
-      if Line = 0 then
-      begin
-        CaretPos := LineStart + Character;
-        Break;
-      end;
-      if Content[I] = #10 then
-      begin
-        Dec(Line);
-        LineStart := I + 1;
-      end;
-    end;
-    if CaretPos = 0 then
-      CaretPos := LineStart + Character;
-
-    // Extract word at position
-    WordStart := CaretPos;
-    WordEnd := CaretPos;
-    while (WordStart > 1) and (Content[WordStart - 1] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Dec(WordStart);
-    while (WordEnd <= Length(Content)) and (Content[WordEnd] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
-      Inc(WordEnd);
-    Word := Copy(Content, WordStart, WordEnd - WordStart);
+    CaretPos := CalculateCaretPosition(Content, Line, Character);
+    Word := ExtractWordAtPosition(Content, CaretPos, WordStart, WordEnd);
 
     if Word = '' then
     begin
