@@ -17,5 +17,9 @@ uses
   simba.lsp_server;
 
 begin
-  RunLSPServer();
+  // --check <file>: Run diagnostics and exit (no LSP server)
+  if (ParamCount >= 2) and (ParamStr(1) = '--check') then
+    RunCheckMode(ParamStr(2))
+  else
+    RunLSPServer();
 end.

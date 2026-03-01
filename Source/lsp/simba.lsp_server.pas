@@ -22,6 +22,27 @@ uses
   simba.ide_codetools_paslexer;
 
 type
+  // Error categories for code action matching (Phase 1)
+  TDiagnosticErrorCategory = (
+    ecUnknown,                   // Unrecognized error
+    ecMissingParens,             // Function used without () - "Can't assign function to Type", etc.
+    ecExtraParens,               // Property called with () - "Cannot invoke property like this"
+    ecPointerWhereVarExpected,   // @Obj passed to var param - "Don't know which overloaded method"
+    ecUnknownDeclaration,        // Typo or missing include - "Unknown declaration X"
+    ecTooManyParams,             // Old API signature - "Too many parameters"
+    ecTypeMismatch               // Type incompatibility
+  );
+
+  TDiagnosticErrorInfo = record
+    RawMessage: String;          // Original formatted message from codetools
+    Message: String;             // Extracted human-readable message
+    Category: TDiagnosticErrorCategory;
+    Line: Integer;               // 1-based line (0 if unknown)
+    Col: Integer;                // 1-based column (0 if unknown)
+    FileName: String;            // Source file (empty if current)
+  end;
+  TDiagnosticErrorInfoArray = array of TDiagnosticErrorInfo;
+
   TSimbaLSPServer = class
   private
     FDocuments: TStringList;
@@ -29,7 +50,7 @@ type
     FShutdown: Boolean;
     FSimbaPath: String;
     FBaseDeclarations: String;
-    FDiagnosticErrors: TStringList;
+    FDiagnosticErrors: TDiagnosticErrorInfoArray;
     FDiagnosticURI: String;
     FWorkspaceIndex: TWorkspaceIndex;
 
@@ -62,6 +83,8 @@ type
     procedure HandleTextDocumentRename(const ID: TJSONData; const Params: TJSONObject);
     procedure HandleTextDocumentTypeDefinition(const ID: TJSONData; const Params: TJSONObject);
     procedure HandleWorkspaceSymbol(const ID: TJSONData; const Params: TJSONObject);
+    procedure HandleTextDocumentCodeAction(const ID: TJSONData; const Params: TJSONObject);
+    procedure HandleTextDocumentInlayHint(const ID: TJSONData; const Params: TJSONObject);
 
     function GetDocumentContent(const URI: String): String;
     procedure SetDocumentContent(const URI: String; const Content: String);
@@ -77,6 +100,7 @@ type
     procedure LoadBaseDeclarations;
     procedure RunDiagnostics(const URI: String);
     procedure HandleCodetoolsError(const Msg: String);
+    function ClassifyError(const Msg: String): TDiagnosticErrorCategory;
   public
     constructor Create;
     destructor Destroy; override;
@@ -87,6 +111,7 @@ type
   end;
 
 procedure RunLSPServer;
+procedure RunCheckMode(const ScriptPath: String);
 
 implementation
 
@@ -155,6 +180,95 @@ begin
   end;
 end;
 
+type
+  { Helper class to collect codetools errors for --check mode }
+  TCheckModeErrorCollector = class
+    Errors: TStringList;
+    procedure HandleError(const Msg: String);
+    constructor Create;
+    destructor Destroy; override;
+  end;
+
+constructor TCheckModeErrorCollector.Create;
+begin
+  inherited;
+  Errors := TStringList.Create;
+end;
+
+destructor TCheckModeErrorCollector.Destroy;
+begin
+  Errors.Free;
+  inherited;
+end;
+
+procedure TCheckModeErrorCollector.HandleError(const Msg: String);
+begin
+  Errors.Add(Msg);
+end;
+
+procedure RunCheckMode(const ScriptPath: String);
+var
+  Codeinsight: TCodeinsight;
+  Collector: TCheckModeErrorCollector;
+  Content: String;
+  FileContent: TStringList;
+  I, ErrorCount: Integer;
+begin
+  if not FileExists(ScriptPath) then
+  begin
+    WriteLn(StdErr, 'Error: File not found: ' + ScriptPath);
+    Halt(2);
+  end;
+
+  InitializeCodetools;
+  ErrorCount := 0;
+
+  Collector := TCheckModeErrorCollector.Create;
+  try
+    SetCodetoolsMessageHandler(@Collector.HandleError);
+
+    // Read script file
+    FileContent := TStringList.Create;
+    try
+      FileContent.LoadFromFile(ScriptPath);
+      Content := FileContent.Text;
+    finally
+      FileContent.Free;
+    end;
+
+    // Parse the script to collect errors
+    Codeinsight := TCodeinsight.Create;
+    try
+      Codeinsight.SetScript(Content, ExpandFileName(ScriptPath), -1);
+      Codeinsight.Run;
+    finally
+      Codeinsight.Free;
+    end;
+
+    SetCodetoolsMessageHandler(nil);
+
+    // Output results
+    ErrorCount := Collector.Errors.Count;
+    if ErrorCount > 0 then
+    begin
+      for I := 0 to Collector.Errors.Count - 1 do
+        WriteLn(Collector.Errors[I]);
+      WriteLn(IntToStr(ErrorCount) + ' error(s) in ' + ScriptPath);
+    end
+    else
+      WriteLn(ScriptPath + ': OK');
+
+  finally
+    Collector.Free;
+    SimbaInitialization_Call(ESimbaInit.IDE_DESTROY);
+  end;
+
+  if ErrorCount > 0 then
+    Halt(1)
+  else
+    Halt(0);
+end;
+
 procedure TSimbaLSPServer.SetupKeywords;
 var
   I: Integer;
@@ -169,7 +283,7 @@ begin
   inherited Create;
   FDocuments := TStringList.Create;
   FDocuments.OwnsObjects := False;
-  FDiagnosticErrors := TStringList.Create;
+  SetLength(FDiagnosticErrors, 0);
   FDiagnosticURI := '';
   FWorkspaceIndex := TWorkspaceIndex.Create;
   FInitialized := False;
@@ -189,7 +303,7 @@ begin
     TStringList(FDocuments.Objects[I]).Free;
   FDocuments.Free;
   FWorkspaceIndex.Free;
-  FDiagnosticErrors.Free;
+  SetLength(FDiagnosticErrors, 0);
   inherited Destroy;
 end;
 
@@ -437,45 +551,113 @@ begin
   DumpList.Free;
 end;
 
-procedure TSimbaLSPServer.HandleCodetoolsError(const Msg: String);
+function TSimbaLSPServer.ClassifyError(const Msg: String): TDiagnosticErrorCategory;
 begin
-  // Collect error messages during parsing
-  FDiagnosticErrors.Add(Msg);
+  // Match known error patterns to categories for code action generation
+  if Pos('Cannot invoke property', Msg) > 0 then
+    Result := ecExtraParens
+  else if (Pos('Can''t assign function to', Msg) > 0) or
+          (Pos('Cannot be evaluated at runtime', Msg) > 0) or
+          (Pos('Operator NOT not compatible with function', Msg) > 0) or
+          (Pos('not compatible with function', Msg) > 0) then
+    Result := ecMissingParens
+  else if Pos('Unknown declaration', Msg) > 0 then
+    Result := ecUnknownDeclaration
+  else if Pos('Too many parameters', Msg) > 0 then
+    Result := ecTooManyParams
+  else if Pos('Don''t know which overloaded method', Msg) > 0 then
+    Result := ecPointerWhereVarExpected
+  else if (Pos('Expected type', Msg) > 0) or
+          (Pos('not compatible with', Msg) > 0) then
+    Result := ecTypeMismatch
+  else
+    Result := ecUnknown;
 end;
 
-procedure TSimbaLSPServer.RunDiagnostics(const URI: String);
+procedure TSimbaLSPServer.HandleCodetoolsError(const Msg: String);
 var
-  Content, FilePath, ErrorMsg, OriginalMsg: String;
-  Codeinsight: TCodeinsight;
-  Diagnostics: TLSPDiagnosticArray;
-  I, Line, Col, P1, P2, SearchStart: Integer;
-  Diag: TLSPDiagnostic;
+  Info: TDiagnosticErrorInfo;
+  P1, P2, SearchStart: Integer;
 
-  // Find last occurrence of substring (search backwards)
   function RPosFrom(const SubStr, S: String; StartPos: Integer): Integer;
   var
     J: Integer;
   begin
     Result := 0;
     for J := StartPos downto 1 do
-    begin
       if Copy(S, J, Length(SubStr)) = SubStr then
       begin
         Result := J;
         Exit;
       end;
+  end;
+
+begin
+  Info.RawMessage := Msg;
+  Info.Message := Msg;
+  Info.Category := ecUnknown;
+  Info.Line := 0;
+  Info.Col := 0;
+  Info.FileName := '';
+
+  // Parse structured error format: "message" at line X, column Y [in file "Z"]
+  SearchStart := Length(Msg);
+  P1 := Pos(' in file "', Msg);
+  if P1 > 0 then
+  begin
+    // Extract filename between quotes after ' in file "'
+    Info.FileName := Copy(Msg, P1 + 10, Length(Msg) - P1 - 10);
+    SearchStart := P1 - 1;
+  end;
+
+  P1 := RPosFrom('" at line ', Msg, SearchStart);
+  if P1 > 0 then
+  begin
+    // Extract message text (between first and last quotes)
+    if (Length(Msg) > 0) and (Msg[1] = '"') then
+      Info.Message := Copy(Msg, 2, P1 - 2);
+
+    // Extract line number
+    P2 := P1 + 10;
+    while (P2 <= Length(Msg)) and (Msg[P2] in ['0'..'9']) do
+      Inc(P2);
+    Info.Line := StrToIntDef(Copy(Msg, P1 + 10, P2 - P1 - 10), 0);
+
+    // Extract column number
+    P1 := Pos(', column ', Copy(Msg, P2, Length(Msg)));
+    if P1 > 0 then
+    begin
+      P1 := P1 + P2 - 1;
+      P2 := P1 + 9;
+      while (P2 <= Length(Msg)) and (Msg[P2] in ['0'..'9']) do
+        Inc(P2);
+      Info.Col := StrToIntDef(Copy(Msg, P1 + 9, P2 - P1 - 9), 0);
     end;
   end;
 
+  Info.Category := ClassifyError(Info.Message);
+
+  SetLength(FDiagnosticErrors, Length(FDiagnosticErrors) + 1);
+  FDiagnosticErrors[High(FDiagnosticErrors)] := Info;
+end;
+
+procedure TSimbaLSPServer.RunDiagnostics(const URI: String);
+var
+  Content, FilePath: String;
+  Codeinsight: TCodeinsight;
+  Diagnostics: TLSPDiagnosticArray;
+  I, Line, Col: Integer;
+  Diag: TLSPDiagnostic;
+  Info: TDiagnosticErrorInfo;
 begin
   Content := GetDocumentContent(URI);
   FilePath := URIToFilePath(URI);
 
   // Clear previous errors and set current URI for error handler
-  FDiagnosticErrors.Clear;
+  SetLength(FDiagnosticErrors, 0);
   FDiagnosticURI := URI;
 
-  // Parse the document to collect errors
+  // Parse the document to collect errors (HandleCodetoolsError populates FDiagnosticErrors)
   Codeinsight := TCodeinsight.Create;
   try
     Codeinsight.SetScript(Content, FilePath, -1);
@@ -484,66 +666,26 @@ begin
     Codeinsight.Free;
   end;
 
-  // Convert collected errors to diagnostics
-  SetLength(Diagnostics, 0);
-  for I := 0 to FDiagnosticErrors.Count - 1 do
+  // Convert structured error info to LSP diagnostics
+  SetLength(Diagnostics, Length(FDiagnosticErrors));
+  for I := 0 to High(FDiagnosticErrors) do
   begin
-    OriginalMsg := FDiagnosticErrors[I];
-    ErrorMsg := OriginalMsg;
-    Line := 0;
-    Col := 0;
+    Info := FDiagnosticErrors[I];
+    Line := Info.Line;
+    Col := Info.Col;
 
-    // Parse error message format: "message" at line X, column Y [in file "Z"]
-    // Important: We need to find the LAST occurrence of '" at line ' because
-    // the error message itself might contain quotes or similar patterns.
-
-    // First, check if there's ' in file "' at the end and find search boundary
-    SearchStart := Length(OriginalMsg);
-    P1 := Pos(' in file "', OriginalMsg);
-    if P1 > 0 then
-      SearchStart := P1 - 1;
-
-    // Find the last '" at line ' before any file info
-    P1 := RPosFrom('" at line ', OriginalMsg, SearchStart);
-    if P1 > 0 then
-    begin
-      // Extract message (between first and last quotes before " at line")
-      // The message starts after position 1 (first quote) and ends before P1
-      if (Length(OriginalMsg) > 0) and (OriginalMsg[1] = '"') then
-        ErrorMsg := Copy(OriginalMsg, 2, P1 - 2);
-
-      // Extract line number
-      P2 := P1 + 10; // After '" at line '
-      while (P2 <= Length(OriginalMsg)) and (OriginalMsg[P2] in ['0'..'9']) do
-        Inc(P2);
-      Line := StrToIntDef(Copy(OriginalMsg, P1 + 10, P2 - P1 - 10), 1);
-
-      // Extract column number - find ', column ' after line number
-      P1 := Pos(', column ', Copy(OriginalMsg, P2, Length(OriginalMsg)));
-      if P1 > 0 then
-      begin
-        P1 := P1 + P2 - 1; // Adjust to absolute position
-        P2 := P1 + 9; // After ', column '
-        while (P2 <= Length(OriginalMsg)) and (OriginalMsg[P2] in ['0'..'9']) do
-          Inc(P2);
-        Col := StrToIntDef(Copy(OriginalMsg, P1 + 9, P2 - P1 - 9), 1);
-      end;
-    end;
-
-    // Create diagnostic
     Diag.Range := CreateRange(Max(0, Line - 1), Max(0, Col - 1),
                               Max(0, Line - 1), Max(0, Col - 1) + 10);
     Diag.Severity := DiagError;
-    Diag.Message := ErrorMsg;
+    Diag.Message := Info.Message;
     Diag.Source := 'simba';
 
-    SetLength(Diagnostics, Length(Diagnostics) + 1);
-    Diagnostics[High(Diagnostics)] := Diag;
+    Diagnostics[I] := Diag;
   end;
 
   // Publish diagnostics (empty array clears previous diagnostics)
   PublishDiagnostics(URI, Diagnostics);
-  FDiagnosticErrors.Clear;
+  // Note: FDiagnosticErrors is kept until next RunDiagnostics call for code action use
 end;
 
 function TSimbaLSPServer.GetDocumentContent(const URI: String): String;
@@ -725,6 +867,16 @@ begin
     // Workspace symbols
     Capabilities.Add('workspaceSymbolProvider', True);
 
+    // Code actions (quick fixes)
+    Capabilities.Add('codeActionProvider', TJSONObject.Create([
+      'codeActionKinds', TJSONArray.Create(['quickfix'])
+    ]));
+
+    // Inlay hints (parameter names)
+    Capabilities.Add('inlayHintProvider', TJSONObject.Create([
+      'resolveProvider', False
+    ]));
+
     // Semantic tokens support
     SemanticProvider := TJSONObject.Create;
     SemanticLegend := TJSONObject.Create;
@@ -762,7 +914,7 @@ begin
   FInitialized := True;
   LoadBaseDeclarations;
   LogMessage('Simba LSP Server initialized');
-  LogMessage('Capabilities: completion, hover, definition, signatureHelp, documentSymbol, diagnostics, semanticTokens, references, foldingRange, rename, typeDefinition, workspaceSymbol, formatting');
+  LogMessage('Capabilities: completion, hover, definition, signatureHelp, documentSymbol, diagnostics, semanticTokens, references, foldingRange, rename, typeDefinition, workspaceSymbol, formatting, codeAction, inlayHint');
 end;
 
 procedure TSimbaLSPServer.HandleShutdown(const ID: TJSONData);
@@ -2205,6 +2357,660 @@ begin
   OpenDocPaths.Free;
 end;
 
+procedure TSimbaLSPServer.HandleTextDocumentCodeAction(const ID: TJSONData; const Params: TJSONObject);
+var
+  TextDocument, Context: TJSONObject;
+  URI, Content: String;
+  DiagArray: TJSONArray;
+  DiagObj: TJSONObject;
+  DiagMsg: String;
+  DiagLine: Integer;
+  Actions: TJSONArray;
+  Action: TLSPCodeAction;
+  ActionDiag: TLSPDiagnostic;
+  I, J: Integer;
+  Info: TDiagnosticErrorInfo;
+  Matched: Boolean;
+
+  // Find the end of an identifier starting at Pos (1-based in Content)
+  function FindIdentEnd(StartPos: Integer): Integer;
+  begin
+    Result := StartPos;
+    while (Result <= Length(Content)) and
+          (Content[Result] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
+      Inc(Result);
+  end;
+
+  // Find the start of an identifier ending before Pos (1-based in Content)
+  function FindIdentStart(EndPos: Integer): Integer;
+  begin
+    Result := EndPos;
+    while (Result > 1) and
+          (Content[Result - 1] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
+      Dec(Result);
+  end;
+
+  // Convert 1-based line/col to 0-based LSP position
+  function ToLSPLine(L: Integer): Integer;
+  begin
+    Result := Max(0, L - 1);
+  end;
+  function ToLSPCol(C: Integer): Integer;
+  begin
+    Result := Max(0, C - 1);
+  end;
+
+  // Find the position of '(' after an identifier, skipping whitespace
+  function FindOpenParen(FromPos: Integer): Integer;
+  begin
+    Result := FromPos;
+    // Skip whitespace
+    while (Result <= Length(Content)) and (Content[Result] in [' ', #9]) do
+      Inc(Result);
+    if (Result <= Length(Content)) and (Content[Result] = '(') then
+      Exit;
+    Result := 0; // Not found
+  end;
+
+  // Find matching close paren for an open paren at Pos
+  function FindCloseParen(OpenPos: Integer): Integer;
+  var
+    Depth: Integer;
+  begin
+    Depth := 1;
+    Result := OpenPos + 1;
+    while (Result <= Length(Content)) and (Depth > 0) do
+    begin
+      if Content[Result] = '(' then Inc(Depth)
+      else if Content[Result] = ')' then Dec(Depth);
+      if Depth > 0 then Inc(Result);
+    end;
+    if Depth <> 0 then Result := 0;
+  end;
+
+  // Create a code action and add it to the Actions array
+  procedure AddAction(const Title: String; EditLine, EditStartCol, EditEndCol: Integer;
+                      const NewText: String; Preferred: Boolean);
+  begin
+    Action.Title := Title;
+    Action.Kind := 'quickfix';
+    Action.IsPreferred := Preferred;
+
+    // Set up the edit
+    Action.Edit.URI := URI;
+    SetLength(Action.Edit.Edits, 1);
+    Action.Edit.Edits[0].Range := CreateRange(
+      ToLSPLine(EditLine), ToLSPCol(EditStartCol),
+      ToLSPLine(EditLine), ToLSPCol(EditEndCol));
+    Action.Edit.Edits[0].NewText := NewText;
+
+    // Attach the diagnostic
+    SetLength(Action.Diagnostics, 1);
+    ActionDiag.Range := CreateRange(
+      ToLSPLine(Info.Line), ToLSPCol(Info.Col),
+      ToLSPLine(Info.Line), ToLSPCol(Info.Col) + 10);
+    ActionDiag.Severity := DiagError;
+    ActionDiag.Message := Info.Message;
+    ActionDiag.Source := 'simba';
+    Action.Diagnostics[0] := ActionDiag;
+
+    Actions.Add(CodeActionToJSON(Action));
+  end;
+
+  // Extract identifier name from "Unknown declaration" message
+  function ExtractUnknownName(const Msg: String): String;
+  var
+    P: Integer;
+  begin
+    Result := '';
+    P := Pos('Unknown declaration "', Msg);
+    if P > 0 then
+    begin
+      Result := Copy(Msg, P + 21, Length(Msg));
+      P := Pos('"', Result);
+      if P > 0 then
+        Result := Copy(Result, 1, P - 1);
+    end;
+  end;
+
+  // Simple Levenshtein distance for fuzzy matching
+  function LevenshteinDistance(const S1, S2: String): Integer;
+  var
+    D: array of array of Integer;
+    Len1, Len2, Cost, X, Y: Integer;
+  begin
+    Len1 := Length(S1);
+    Len2 := Length(S2);
+    SetLength(D, Len1 + 1, Len2 + 1);
+    for X := 0 to Len1 do D[X][0] := X;
+    for Y := 0 to Len2 do D[0][Y] := Y;
+
+    for X := 1 to Len1 do
+      for Y := 1 to Len2 do
+      begin
+        if UpCase(S1[X]) = UpCase(S2[Y]) then
+          Cost := 0
+        else
+          Cost := 1;
+        D[X][Y] := D[X-1][Y] + 1;         // Deletion
+        if D[X][Y-1] + 1 < D[X][Y] then
+          D[X][Y] := D[X][Y-1] + 1;        // Insertion
+        if D[X-1][Y-1] + Cost < D[X][Y] then
+          D[X][Y] := D[X-1][Y-1] + Cost;   // Substitution
+      end;
+
+    Result := D[Len1][Len2];
+  end;
+
+var
+  CaretPos, IdentEnd, ParenOpen, ParenClose: Integer;
+  UnknownName, CandidateName: String;
+  Codeinsight: TCodeinsight;
+  Decls: TDeclarationArray;
+  BestDist, Dist: Integer;
+  BestName: String;
+begin
+  TextDocument := Params.Get('textDocument', TJSONObject(nil));
+  Context := Params.Get('context', TJSONObject(nil));
+
+  if not Assigned(TextDocument) or not Assigned(Context) then
+  begin
+    SendResponse(ID, TJSONArray.Create);
+    Exit;
+  end;
+
+  URI := TextDocument.Get('uri', '');
+  Content := GetDocumentContent(URI);
+  Actions := TJSONArray.Create;
+
+  // Get diagnostics from the request context
+  DiagArray := Context.Get('diagnostics', TJSONArray(nil));
+  if not Assigned(DiagArray) or (DiagArray.Count = 0) then
+  begin
+    SendResponse(ID, Actions);
+    Exit;
+  end;
+
+  try
+    // For each diagnostic in the request, find matching stored error info
+    for I := 0 to DiagArray.Count - 1 do
+    begin
+      DiagObj := TJSONObject(DiagArray[I]);
+      DiagMsg := DiagObj.Get('message', '');
+      DiagLine := TJSONObject(TJSONObject(DiagObj.Get('range', TJSONObject(nil))).Get('start', TJSONObject(nil))).Get('line', -1);
+
+      // Find matching error in our stored structured errors
+      Matched := False;
+      for J := 0 to High(FDiagnosticErrors) do
+      begin
+        Info := FDiagnosticErrors[J];
+        // Match by message and line (0-based LSP line = Info.Line - 1)
+        if (Info.Message = DiagMsg) and (ToLSPLine(Info.Line) = DiagLine) then
+        begin
+          Matched := True;
+          Break;
+        end;
+      end;
+
+      if not Matched then
+        Continue;
+
+      // Generate quick fixes based on error category
+      case Info.Category of
+        ecMissingParens:
+        begin
+          // Add "()" after the identifier at the error position
+          if (Info.Line > 0) and (Info.Col > 0) then
+          begin
+            CaretPos := LSPCalculateCaretPosition(Content, ToLSPLine(Info.Line), ToLSPCol(Info.Col));
+            IdentEnd := FindIdentEnd(CaretPos);
+            // Insert "()" at end of identifier
+            AddAction('Add ''()'' to function call',
+                      Info.Line, Info.Col + (IdentEnd - CaretPos), Info.Col + (IdentEnd - CaretPos),
+                      '()', True);
+          end;
+        end;
+
+        ecExtraParens:
+        begin
+          // Remove "()" after the property identifier
+          if (Info.Line > 0) and (Info.Col > 0) then
+          begin
+            CaretPos := LSPCalculateCaretPosition(Content, ToLSPLine(Info.Line), ToLSPCol(Info.Col));
+            IdentEnd := FindIdentEnd(CaretPos);
+            ParenOpen := FindOpenParen(IdentEnd);
+            if ParenOpen > 0 then
+            begin
+              ParenClose := FindCloseParen(ParenOpen);
+              if ParenClose > 0 then
+              begin
+                // Remove from paren open through paren close (inclusive)
+                AddAction('Remove ''()'' from property access',
+                          Info.Line, Info.Col + (ParenOpen - CaretPos), Info.Col + (ParenClose - CaretPos) + 1,
+                          '', True);
+              end;
+            end;
+          end;
+        end;
+
+        ecPointerWhereVarExpected:
+        begin
+          // Remove "@" before the identifier
+          if (Info.Line > 0) and (Info.Col > 0) then
+          begin
+            CaretPos := LSPCalculateCaretPosition(Content, ToLSPLine(Info.Line), ToLSPCol(Info.Col));
+            // Check if '@' is just before the identifier
+            if (CaretPos > 1) and (Content[CaretPos - 1] = '@') then
+              AddAction('Remove ''@'' (pass by reference instead)',
+                        Info.Line, Info.Col - 1, Info.Col,
+                        '', True)
+            else if (CaretPos >= 1) and (Content[CaretPos] = '@') then
+              AddAction('Remove ''@'' (pass by reference instead)',
+                        Info.Line, Info.Col, Info.Col + 1,
+                        '', True);
+          end;
+        end;
+
+        ecUnknownDeclaration:
+        begin
+          // Fuzzy-match against known declarations
+          UnknownName := ExtractUnknownName(Info.Message);
+          if (UnknownName <> '') and (Info.Line > 0) and (Info.Col > 0) then
+          begin
+            CaretPos := LSPCalculateCaretPosition(Content, ToLSPLine(Info.Line), ToLSPCol(Info.Col));
+            IdentEnd := FindIdentEnd(CaretPos);
+
+            Codeinsight := TCodeinsight.Create;
+            try
+              Codeinsight.SetScript(Content, URIToFilePath(URI), CaretPos);
+              Codeinsight.Run;
+
+              // Search locals + globals for fuzzy matches
+              BestDist := MaxInt;
+              BestName := '';
+
+              Decls := Codeinsight.GetLocals;
+              for J := 0 to High(Decls) do
+              begin
+                CandidateName := Decls[J].Name;
+                if (CandidateName <> '') and (CandidateName <> UnknownName) then
+                begin
+                  Dist := LevenshteinDistance(UnknownName, CandidateName);
+                  // Only suggest if distance is reasonable (max 2 edits, or ~40% of length)
+                  if (Dist < BestDist) and (Dist <= Max(2, Length(UnknownName) div 3)) then
+                  begin
+                    BestDist := Dist;
+                    BestName := CandidateName;
+                  end;
+                end;
+              end;
+
+              Decls := Codeinsight.GetGlobals;
+              for J := 0 to High(Decls) do
+              begin
+                CandidateName := Decls[J].Name;
+                if (CandidateName <> '') and (CandidateName <> UnknownName) then
+                begin
+                  Dist := LevenshteinDistance(UnknownName, CandidateName);
+                  if (Dist < BestDist) and (Dist <= Max(2, Length(UnknownName) div 3)) then
+                  begin
+                    BestDist := Dist;
+                    BestName := CandidateName;
+                  end;
+                end;
+              end;
+
+              if BestName <> '' then
+                AddAction('Replace with ''' + BestName + '''',
+                          Info.Line, Info.Col, Info.Col + (IdentEnd - CaretPos),
+                          BestName, False);
+            finally
+              Codeinsight.Free;
+            end;
+          end;
+        end;
+      end; // case
+    end; // for each diagnostic
+
+    SendResponse(ID, Actions);
+  except
+    on E: Exception do
+    begin
+      Actions.Free;
+      SendError(ID, -32603, 'Code action failed: ' + E.Message);
+    end;
+  end;
+end;
+
+procedure TSimbaLSPServer.HandleTextDocumentInlayHint(const ID: TJSONData; const Params: TJSONObject);
+var
+  TextDocument, RangeObj, StartPos, EndPos: TJSONObject;
+  URI, Content, FilePath, FuncName, Expr: String;
+  StartLine, EndLine: Integer;
+  RangeStart, RangeEnd: Integer;
+  Hints: TJSONArray;
+  Hint: TLSPInlayHint;
+  Codeinsight: TCodeinsight;
+  Decls, Members, MethodParams: TDeclarationArray;
+  Method: TDeclaration_Method;
+  ExprDecl, Decl: TDeclaration;
+  I, Pos_, Depth, ArgStart, ArgIndex: Integer;
+  FuncNameStart, FuncNameEnd, DotPos_, ExprStart_: Integer;
+  ParenOpenPos: Integer;
+  IsMemberAccess: Boolean;
+  InString: Boolean;
+  StringChar: Char;
+  Ch: Char;
+  ArgPositions: array of Integer; // content positions where each argument starts
+
+  // Convert a 1-based content position to 0-based LSP line and character
+  procedure ContentPosToLSP(ContentPos: Integer; out LSPLine, LSPChar: Integer);
+  var
+    J, LineStart: Integer;
+  begin
+    LSPLine := 0;
+    LineStart := 1;
+    for J := 1 to ContentPos - 1 do
+    begin
+      if Content[J] = #10 then
+      begin
+        Inc(LSPLine);
+        LineStart := J + 1;
+      end;
+    end;
+    LSPChar := ContentPos - LineStart;
+  end;
+
+  // Skip whitespace forward from a position
+  function SkipWhitespace(FromPos: Integer): Integer;
+  begin
+    Result := FromPos;
+    while (Result <= Length(Content)) and (Content[Result] in [' ', #9, #10, #13]) do
+      Inc(Result);
+  end;
+
+begin
+  TextDocument := Params.Get('textDocument', TJSONObject(nil));
+  RangeObj := Params.Get('range', TJSONObject(nil));
+
+  if not Assigned(TextDocument) or not Assigned(RangeObj) then
+  begin
+    SendResponse(ID, TJSONArray.Create);
+    Exit;
+  end;
+
+  URI := TextDocument.Get('uri', '');
+  Content := GetDocumentContent(URI);
+  FilePath := URIToFilePath(URI);
+  Hints := TJSONArray.Create;
+
+  StartPos := TJSONObject(RangeObj.Get('start', TJSONObject(nil)));
+  EndPos := TJSONObject(RangeObj.Get('end', TJSONObject(nil)));
+  if not Assigned(StartPos) or not Assigned(EndPos) then
+  begin
+    SendResponse(ID, Hints);
+    Exit;
+  end;
+
+  StartLine := StartPos.Get('line', 0);
+  EndLine := EndPos.Get('line', 0);
+
+  // Convert LSP line range to content positions
+  RangeStart := LSPCalculateCaretPosition(Content, StartLine, 0);
+  RangeEnd := LSPCalculateCaretPosition(Content, EndLine + 1, 0);
+  if RangeEnd > Length(Content) then
+    RangeEnd := Length(Content);
+
+  try
+    // Create a single Codeinsight for resolving declarations
+    Codeinsight := TCodeinsight.Create;
+    try
+      Codeinsight.SetScript(Content, FilePath, RangeStart);
+      Codeinsight.Run;
+
+      // Scan for function calls: identifier followed by '('
+      Pos_ := RangeStart;
+      while Pos_ <= RangeEnd do
+      begin
+        Ch := Content[Pos_];
+
+        // Skip string literals
+        if Ch in ['''', '"'] then
+        begin
+          StringChar := Ch;
+          Inc(Pos_);
+          while (Pos_ <= Length(Content)) and (Content[Pos_] <> StringChar) do
+            Inc(Pos_);
+          Inc(Pos_);
+          Continue;
+        end;
+
+        // Skip line comments
+        if (Ch = '/') and (Pos_ < Length(Content)) and (Content[Pos_ + 1] = '/') then
+        begin
+          while (Pos_ <= Length(Content)) and not (Content[Pos_] in [#10, #13]) do
+            Inc(Pos_);
+          Continue;
+        end;
+
+        // Skip block comments { ... }
+        if Ch = '{' then
+        begin
+          Inc(Pos_);
+          while (Pos_ <= Length(Content)) and (Content[Pos_] <> '}') do
+            Inc(Pos_);
+          Inc(Pos_);
+          Continue;
+        end;
+
+        // Look for '(' preceded by an identifier
+        if Ch = '(' then
+        begin
+          // Find function name before '('
+          FuncNameEnd := Pos_ - 1;
+          while (FuncNameEnd > 0) and (Content[FuncNameEnd] in [' ', #9]) do
+            Dec(FuncNameEnd);
+
+          if (FuncNameEnd > 0) and (Content[FuncNameEnd] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) then
+          begin
+            FuncNameStart := FuncNameEnd;
+            while (FuncNameStart > 1) and (Content[FuncNameStart - 1] in ['a'..'z', 'A'..'Z', '0'..'9', '_']) do
+              Dec(FuncNameStart);
+            FuncName := Copy(Content, FuncNameStart, FuncNameEnd - FuncNameStart + 1);
+            ParenOpenPos := Pos_;
+
+            // Skip keywords that use parens but aren't function calls
+            if (LowerCase(FuncName) = 'if') or (LowerCase(FuncName) = 'while') or
+               (LowerCase(FuncName) = 'for') or (LowerCase(FuncName) = 'case') or
+               (LowerCase(FuncName) = 'until') or (LowerCase(FuncName) = 'enum') or
+               (LowerCase(FuncName) = 'array') or (LowerCase(FuncName) = 'set') then
+            begin
+              Inc(Pos_);
+              Continue;
+            end;
+
+            // Find argument positions at depth 0 within the parens
+            SetLength(ArgPositions, 0);
+            Depth := 1;
+            I := ParenOpenPos + 1;
+            InString := False;
+            StringChar := #0;
+
+            // First arg starts after '(' (skip whitespace)
+            ArgStart := SkipWhitespace(I);
+            // Check it's not an empty call ()
+            if (ArgStart <= Length(Content)) and (Content[ArgStart] <> ')') then
+            begin
+              SetLength(ArgPositions, 1);
+              ArgPositions[0] := ArgStart;
+            end;
+
+            while (I <= Length(Content)) and (Depth > 0) do
+            begin
+              if InString then
+              begin
+                if Content[I] = StringChar then
+                  InString := False;
+              end
+              else
+              begin
+                case Content[I] of
+                  '''', '"':
+                  begin
+                    InString := True;
+                    StringChar := Content[I];
+                  end;
+                  '(', '[': Inc(Depth);
+                  ')', ']':
+                  begin
+                    Dec(Depth);
+                    if Depth = 0 then Break;
+                  end;
+                  ',':
+                    if Depth = 1 then
+                    begin
+                      // New argument starts after comma (skip whitespace)
+                      ArgStart := SkipWhitespace(I + 1);
+                      SetLength(ArgPositions, Length(ArgPositions) + 1);
+                      ArgPositions[High(ArgPositions)] := ArgStart;
+                    end;
+                end;
+              end;
+              Inc(I);
+            end;
+
+            // Only generate hints if there are arguments
+            if Length(ArgPositions) > 0 then
+            begin
+              // Resolve the function declaration
+              Method := nil;
+
+              // Check for member access: expr.FuncName(
+              IsMemberAccess := False;
+              DotPos_ := FuncNameStart - 1;
+              while (DotPos_ > 0) and (Content[DotPos_] in [' ', #9]) do
+                Dec(DotPos_);
+
+              if (DotPos_ > 0) and (Content[DotPos_] = '.') then
+              begin
+                IsMemberAccess := True;
+                ExprStart_ := DotPos_ - 1;
+                while (ExprStart_ > 0) and (Content[ExprStart_] in [' ', #9]) do
+                  Dec(ExprStart_);
+
+                // Walk backwards through expression (identifiers, dots, parens, brackets)
+                while (ExprStart_ > 0) do
+                begin
+                  Ch := Content[ExprStart_];
+                  if Ch in ['a'..'z', 'A'..'Z', '0'..'9', '_', '.'] then
+                    Dec(ExprStart_)
+                  else if Ch = ')' then
+                  begin
+                    Depth := 1;
+                    Dec(ExprStart_);
+                    while (ExprStart_ > 0) and (Depth > 0) do
+                    begin
+                      if Content[ExprStart_] = ')' then Inc(Depth)
+                      else if Content[ExprStart_] = '(' then Dec(Depth);
+                      Dec(ExprStart_);
+                    end;
+                  end
+                  else if Ch = ']' then
+                  begin
+                    Depth := 1;
+                    Dec(ExprStart_);
+                    while (ExprStart_ > 0) and (Depth > 0) do
+                    begin
+                      if Content[ExprStart_] = ']' then Inc(Depth)
+                      else if Content[ExprStart_] = '[' then Dec(Depth);
+                      Dec(ExprStart_);
+                    end;
+                  end
+                  else
+                    Break;
+                end;
+                Inc(ExprStart_);
+
+                Expr := Trim(Copy(Content, ExprStart_, DotPos_ - ExprStart_));
+                if Expr <> '' then
+                begin
+                  try
+                    ExprDecl := Codeinsight.ParseExpr(Expr, Members);
+                    if Assigned(ExprDecl) then
+                    begin
+                      if ExprDecl is TDeclaration_Var then
+                        Members := Codeinsight.GetTypeMembers(
+                          Codeinsight.ResolveVarType(TDeclaration_Var(ExprDecl).VarType))
+                      else if (ExprDecl is TDeclaration_Method) and
+                              Assigned(TDeclaration_Method(ExprDecl).ResultType) then
+                        Members := Codeinsight.GetTypeMembers(
+                          Codeinsight.ResolveVarType(TDeclaration_Method(ExprDecl).ResultType))
+                      else if ExprDecl is TDeclaration_Type then
+                        Members := Codeinsight.GetTypeMembers(ExprDecl as TDeclaration_Type);
+
+                      for Decl in Members do
+                        if (Decl is TDeclaration_Method) and SameText(Decl.Name, FuncName) then
+                        begin
+                          Method := TDeclaration_Method(Decl);
+                          Break;
+                        end;
+                    end;
+                  except
+                    Method := nil;
+                  end;
+                end;
+              end;
+
+              if not IsMemberAccess then
+              begin
+                try
+                  Decls := Codeinsight.Get(FuncName);
+                  if (Length(Decls) > 0) and (Decls[0] is TDeclaration_Method) then
+                    Method := TDeclaration_Method(Decls[0]);
+                except
+                  Method := nil;
+                end;
+              end;
+
+              // Generate hints for resolved method
+              if Assigned(Method) then
+              begin
+                MethodParams := Method.Params;
+                for ArgIndex := 0 to Min(High(ArgPositions), High(MethodParams)) do
+                begin
+                  if MethodParams[ArgIndex].Name <> '' then
+                  begin
+                    ContentPosToLSP(ArgPositions[ArgIndex], Hint.Position.Line, Hint.Position.Character);
+                    Hint.LabelText := MethodParams[ArgIndex].Name + ':';
+                    Hint.Kind := ihkParameter;
+                    Hint.PaddingLeft := False;
+                    Hint.PaddingRight := True;
+                    Hints.Add(InlayHintToJSON(Hint));
+                  end;
+                end;
+              end;
+            end; // if ArgPositions > 0
+          end; // if identifier before '('
+        end; // if Ch = '('
+
+        Inc(Pos_);
+      end; // while scanning
+
+    finally
+      Codeinsight.Free;
+    end;
+
+    SendResponse(ID, Hints);
+  except
+    on E: Exception do
+    begin
+      LogMessage('Inlay hint error: ' + E.Message);
+      Hints.Free;
+      SendResponse(ID, TJSONArray.Create);
+    end;
+  end;
+end;
+
 procedure TSimbaLSPServer.Run;
 var
   Message: String;
@@ -2265,6 +3071,10 @@ begin
           HandleTextDocumentTypeDefinition(ID, Params)
         else if Method = 'workspace/symbol' then
           HandleWorkspaceSymbol(ID, Params)
+        else if Method = 'textDocument/codeAction' then
+          HandleTextDocumentCodeAction(ID, Params)
+        else if Method = 'textDocument/inlayHint' then
+          HandleTextDocumentInlayHint(ID, Params)
         else if Assigned(ID) then
           SendError(ID, -32601, 'Method not found: ' + Method);
 

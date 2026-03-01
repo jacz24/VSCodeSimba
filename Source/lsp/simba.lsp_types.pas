@@ -194,6 +194,42 @@ type
     stmDefaultLibrary = 9
   );
 
+  // Code action types (for quick fixes)
+  TLSPTextEdit = record
+    Range: TLSPRange;
+    NewText: String;
+  end;
+  TLSPTextEditArray = array of TLSPTextEdit;
+
+  TLSPWorkspaceEdit = record
+    URI: String;
+    Edits: TLSPTextEditArray;
+  end;
+
+  TLSPCodeAction = record
+    Title: String;
+    Kind: String;       // 'quickfix', 'refactor', etc.
+    Edit: TLSPWorkspaceEdit;
+    Diagnostics: TLSPDiagnosticArray;
+    IsPreferred: Boolean;
+  end;
+  TLSPCodeActionArray = array of TLSPCodeAction;
+
+  // Inlay hint types
+  TLSPInlayHintKind = (
+    ihkType = 1,
+    ihkParameter = 2
+  );
+
+  TLSPInlayHint = record
+    Position: TLSPPosition;
+    LabelText: String;
+    Kind: TLSPInlayHintKind;
+    PaddingLeft: Boolean;
+    PaddingRight: Boolean;
+  end;
+  TLSPInlayHintArray = array of TLSPInlayHint;
+
   // Semantic token data (before encoding)
   TLSPSemanticToken = record
     Line: Integer;       // 0-based line number
@@ -230,6 +266,11 @@ function CompletionItemToJSON(const Item: TLSPCompletionItem): TJSONObject;
 function DocumentSymbolToJSON(const Symbol: TLSPDocumentSymbol): TJSONObject;
 function HoverToJSON(const Hover: TLSPHover): TJSONObject;
 function SignatureHelpToJSON(const SigHelp: TLSPSignatureHelp): TJSONObject;
+
+function TextEditToJSON(const Edit: TLSPTextEdit): TJSONObject;
+function WorkspaceEditToJSON(const Edit: TLSPWorkspaceEdit): TJSONObject;
+function CodeActionToJSON(const Action: TLSPCodeAction): TJSONObject;
+function InlayHintToJSON(const Hint: TLSPInlayHint): TJSONObject;
 
 function FilePathToURI(const FilePath: String): String;
 function URIToFilePath(const URI: String): String;
@@ -345,6 +386,67 @@ begin
   Result.Add('signatures', Signatures);
   Result.Add('activeSignature', SigHelp.ActiveSignature);
   Result.Add('activeParameter', SigHelp.ActiveParameter);
+end;
+
+function TextEditToJSON(const Edit: TLSPTextEdit): TJSONObject;
+begin
+  Result := TJSONObject.Create;
+  Result.Add('range', RangeToJSON(Edit.Range));
+  Result.Add('newText', Edit.NewText);
+end;
+
+function WorkspaceEditToJSON(const Edit: TLSPWorkspaceEdit): TJSONObject;
+var
+  Changes: TJSONObject;
+  EditsArray: TJSONArray;
+  I: Integer;
+begin
+  // LSP WorkspaceEdit format: { changes: { [uri]: TextEdit[] } }
+  Result := TJSONObject.Create;
+  Changes := TJSONObject.Create;
+  EditsArray := TJSONArray.Create;
+
+  for I := 0 to High(Edit.Edits) do
+    EditsArray.Add(TextEditToJSON(Edit.Edits[I]));
+
+  Changes.Add(Edit.URI, EditsArray);
+  Result.Add('changes', Changes);
+end;
+
+function CodeActionToJSON(const Action: TLSPCodeAction): TJSONObject;
+var
+  DiagArray: TJSONArray;
+  I: Integer;
+begin
+  Result := TJSONObject.Create;
+  Result.Add('title', Action.Title);
+  Result.Add('kind', Action.Kind);
+
+  if Length(Action.Edit.Edits) > 0 then
+    Result.Add('edit', WorkspaceEditToJSON(Action.Edit));
+
+  if Length(Action.Diagnostics) > 0 then
+  begin
+    DiagArray := TJSONArray.Create;
+    for I := 0 to High(Action.Diagnostics) do
+      DiagArray.Add(DiagnosticToJSON(Action.Diagnostics[I]));
+    Result.Add('diagnostics', DiagArray);
+  end;
+
+  if Action.IsPreferred then
+    Result.Add('isPreferred', True);
+end;
+
+function InlayHintToJSON(const Hint: TLSPInlayHint): TJSONObject;
+begin
+  Result := TJSONObject.Create;
+  Result.Add('position', PositionToJSON(Hint.Position));
+  Result.Add('label', Hint.LabelText);
+  Result.Add('kind', Ord(Hint.Kind));
+  if Hint.PaddingLeft then
+    Result.Add('paddingLeft', True);
+  if Hint.PaddingRight then
+    Result.Add('paddingRight', True);
 end;
 
 function FilePathToURI(const FilePath: String): String;
