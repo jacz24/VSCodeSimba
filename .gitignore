@@ -35,6 +35,7 @@ backup/
 /DocGen/build/_images
 /DocGen/build/plugins
 /DocGen/build/simba
+/Source/lsp/lib
 /Source/ide/codetools/test/lib
 /Source/ide/codetools/test/test.exe
 /Source/ide/codetools/test/test.lps
