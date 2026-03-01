@@ -115,6 +115,43 @@
         "command": "simba.selectTargetWindow",
         "title": "Simba: Select Target Window",
         "icon": "$(window)"
+      },
+      {
+        "command": "simba.openWalkthrough",
+        "title": "Simba: Getting Started"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "simba",
+        "required": ["task"],
+        "properties": {
+          "task": {
+            "type": "string",
+            "enum": ["run", "compile"],
+            "description": "The Simba task to run"
+          },
+          "file": {
+            "type": "string",
+            "description": "Path to .simba file (defaults to active editor)"
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "simba",
+        "owner": "simba",
+        "fileLocation": "absolute",
+        "pattern": [
+          {
+            "regexp": "^Error:\\s*\"(.+)\"\\s+at\\s+\\[(.+)\\]\\s+line\\s+(\\d+)(?:,\\s*column\\s+(\\d+))?",
+            "message": 1,
+            "file": 2,
+            "line": 3,
+            "column": 4
+          }
+        ]
       }
     ],
     "keybindings": [
@@ -127,6 +164,60 @@
         "command": "simba.stopScript",
         "key": "shift+f5",
         "when": "editorLangId == simba && simba.scriptRunning"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "simba-getting-started",
+        "title": "Getting Started with Simba",
+        "description": "Set up your Simba development environment in VS Code",
+        "steps": [
+          {
+            "id": "welcome",
+            "title": "Welcome to Simba",
+            "description": "Overview of Simba language support in VS Code.\n[Learn more](command:simba.openWalkthrough)",
+            "media": {
+              "markdown": "media/welcome.md"
+            },
+            "completionEvents": ["onStepSelected"]
+          },
+          {
+            "id": "configure-simba",
+            "title": "Configure Simba Path",
+            "description": "Set the path to your Simba binary for running scripts.\n[Open Settings](command:workbench.action.openSettings?%5B%22simba.runPath%22%5D)",
+            "media": {
+              "markdown": "media/configure-simba.md"
+            },
+            "completionEvents": ["onSettingChanged:simba.runPath"]
+          },
+          {
+            "id": "configure-lsp",
+            "title": "Configure Language Server",
+            "description": "Set up the Simba LSP for code intelligence.\n[Open Settings](command:workbench.action.openSettings?%5B%22simba.lsp.simbaLspPath%22%5D)",
+            "media": {
+              "markdown": "media/configure-lsp.md"
+            },
+            "completionEvents": ["onSettingChanged:simba.lsp.simbaLspPath"]
+          },
+          {
+            "id": "include-paths",
+            "title": "Configure Include Paths",
+            "description": "Add paths where Simba looks for include files.\n[Open Settings](command:workbench.action.openSettings?%5B%22simba.includePaths%22%5D)",
+            "media": {
+              "markdown": "media/include-paths.md"
+            },
+            "completionEvents": ["onSettingChanged:simba.includePaths"]
+          },
+          {
+            "id": "first-script",
+            "title": "Run Your First Script",
+            "description": "Run a Simba script directly from VS Code.\n[Run Script](command:simba.runScript)",
+            "media": {
+              "markdown": "media/first-script.md"
+            },
+            "completionEvents": ["onCommand:simba.runScript"]
+          }
+        ]
       }
     ],
     "menus": {

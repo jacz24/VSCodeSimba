@@ -140,5 +140,268 @@
       "end;"
     ],
     "description": "Record type"
+  },
+
+  "WaspLib Script Template": {
+    "prefix": "script",
+    "body": [
+      "{\\$I WaspLib/osrs.simba}",
+      "",
+      "type",
+      "  E${1:Script}State = enum(",
+      "    LOGIN,",
+      "    LEVEL_UP,",
+      "    ${2:DO_ACTIVITY},",
+      "",
+      "    NO_ACTIVITY, MAX_ACTIONS, MAX_TIME, MAX_LEVEL, END_SCRIPT",
+      "  );",
+      "",
+      "  T${1:Script} = record",
+      "    Actions, MaxTime, MaxActions, MaxLevel: UInt64;",
+      "  end;",
+      "",
+      "function T${1:Script}.GetReportValues(): TStringArray;",
+      "var",
+      "  actionsStr, sleepInfo: String;",
+      "begin",
+      "  actionsStr := ToStr(Self.Actions);",
+      "  if Self.MaxActions <> 0 then",
+      "    actionsStr += '/' + ToStr(Self.MaxActions);",
+      "",
+      "  if Antiban.Sleeps = [] then",
+      "    sleepInfo := 'No sleep'",
+      "  else",
+      "    sleepInfo := Antiban.TimeUntilSleep(Antiban.Sleeps.First, TIME_SHORT);",
+      "",
+      "  Result := [",
+      "    GetTimeStamp(TIME_SHORT),",
+      "    Logger.TimeRunning.ElapsedFmt(TIME_SHORT),",
+      "    Antiban.TimeRunning.ElapsedFmt(TIME_SHORT),",
+      "    sleepInfo,",
+      "    actionsStr",
+      "  ];",
+      "end;",
+      "",
+      "procedure T${1:Script}.Init();",
+      "begin",
+      "  Logger.Setup('${1:Script}');",
+      "  ProgressReport.Setup(",
+      "    '${1:Script}',",
+      "    [",
+      "      'Script runtime:', 'Botting runtime:', 'Antiban runtime:', 'Next sleep:',",
+      "      'Actions:'",
+      "    ],",
+      "    @Self.GetReportValues",
+      "  );",
+      "",
+      "  Map.Setup([ERSChunk.${3:VARROCK}]);",
+      "",
+      "  Antiban.Zoom.Min := 0;",
+      "  Antiban.Zoom.Max := 50;",
+      "  Antiban.Skills := [ERSSkill.${4:TOTAL}];",
+      "end;",
+      "",
+      "function T${1:Script}.GetState(): E${1:Script}State;",
+      "begin",
+      "  if Activity.IsFinished then",
+      "    Exit(E${1:Script}State.NO_ACTIVITY);",
+      "",
+      "  if (Self.MaxActions > 0) and (Self.Actions >= Self.MaxActions) then",
+      "    Exit(E${1:Script}State.MAX_ACTIONS);",
+      "",
+      "  if (Self.MaxTime > 0) and (Logger.TimeRunning.Elapsed >= Self.MaxTime) then",
+      "    Exit(E${1:Script}State.MAX_TIME);",
+      "",
+      "  if (Self.MaxLevel > 0) and (Stats.GetLevel(ERSSkill.${4:TOTAL}) >= Self.MaxLevel) then",
+      "    Exit(E${1:Script}State.MAX_LEVEL);",
+      "",
+      "  if not RSClient.IsLoggedIn() then",
+      "    Exit(E${1:Script}State.LOGIN);",
+      "",
+      "  if Chat.LeveledUp() then",
+      "    Exit(E${1:Script}State.LEVEL_UP);",
+      "",
+      "  Result := E${1:Script}State.${2:DO_ACTIVITY};",
+      "end;",
+      "",
+      "procedure T${1:Script}.Run();",
+      "var",
+      "  state: E${1:Script}State;",
+      "begin",
+      "  Self.Init();",
+      "",
+      "  repeat",
+      "    state := Self.GetState();",
+      "    Logger.Info(ToStr(state));",
+      "    ProgressReport.Print();",
+      "    WaspClient.SubmitStats();",
+      "",
+      "    case state of",
+      "      E${1:Script}State.LOGIN: Login.DoLogin();",
+      "      E${1:Script}State.LEVEL_UP: Chat.HandleLevelUp();",
+      "      E${1:Script}State.${2:DO_ACTIVITY}: ${0:// TODO};",
+      "",
+      "      E${1:Script}State.NO_ACTIVITY, E${1:Script}State.MAX_ACTIONS,",
+      "      E${1:Script}State.MAX_TIME, E${1:Script}State.MAX_LEVEL,",
+      "      E${1:Script}State.END_SCRIPT: Break;",
+      "    end;",
+      "",
+      "    Antiban.DoAntiban();",
+      "  until False;",
+      "",
+      "  Logger.Info('Thank you for using ' + Logger.Name);",
+      "end;",
+      "",
+      "var",
+      "  ${1:Script}: T${1:Script};",
+      "  ${1:Script}Form: TScriptForm;",
+      "  ${1:Script}Config: TConfigJSON;",
+      "",
+      "procedure TScriptForm.OnStart(sender: TLazObject); override;",
+      "begin",
+      "  inherited;",
+      "",
+      "  ${1:Script}.MaxActions := Self.Goals.Actions.Value;",
+      "  ${1:Script}.MaxTime    := Self.Goals.Time.Value * ONE_MINUTE;",
+      "  ${1:Script}.MaxLevel   := Self.Goals.Level.Value;",
+      "",
+      "  ${1:Script}Config.Save();",
+      "end;",
+      "",
+      "procedure TScriptForm.Init();",
+      "var",
+      "  tab: TLazTabSheet;",
+      "  panel: TLazPanel;",
+      "begin",
+      "  ${1:Script}Config.Setup('scripts' + PATH_SEP + '${5:my-script-name}');",
+      "  Self.Setup('${1:Script}', ${1:Script}Config.Data);",
+      "",
+      "  tab := Self.CreateTab('${1:Script}');",
+      "  panel := Self.CreateGoals(tab, True, True, True, EOrientation.HORIZONTAL);",
+      "  panel.Align := ELazAlign.Bottom;",
+      "",
+      "  Self.CreateAntibanTab();",
+      "  Self.Run();",
+      "end;",
+      "",
+      "begin",
+      "  ${1:Script}Form.Init();",
+      "  ${1:Script}.Run();",
+      "end."
+    ],
+    "description": "Full WaspLib state machine script skeleton with form, config, progress report, and antiban"
+  },
+
+  "Map Setup": {
+    "prefix": "mapsetup",
+    "body": [
+      "Map.Setup([ERSChunk.${1:VARROCK}]);"
+    ],
+    "description": "Setup world map with chunk region"
+  },
+
+  "Antiban Configuration": {
+    "prefix": "antiban",
+    "body": [
+      "Antiban.Zoom.Min := ${1:0};",
+      "Antiban.Zoom.Max := ${2:50};",
+      "Antiban.Skills := [ERSSkill.${3:TOTAL}];"
+    ],
+    "description": "Configure antiban zoom range and tracked skills"
+  },
+
+  "Bank Open Pattern": {
+    "prefix": "bankopen",
+    "body": [
+      "if Bank.IsOpen() then",
+      "begin",
+      "  Bank.DepositAll();",
+      "  ${0:// withdraw items}",
+      "  Bank.Close(True);",
+      "end;"
+    ],
+    "description": "Bank interaction with deposit and withdraw pattern"
+  },
+
+  "GetState Checks": {
+    "prefix": "statecheck",
+    "body": [
+      "if Activity.IsFinished then",
+      "  Exit(${1:EState}.NO_ACTIVITY);",
+      "",
+      "if (Self.MaxActions > 0) and (Self.Actions >= Self.MaxActions) then",
+      "  Exit(${1:EState}.MAX_ACTIONS);",
+      "",
+      "if (Self.MaxTime > 0) and (Logger.TimeRunning.Elapsed >= Self.MaxTime) then",
+      "  Exit(${1:EState}.MAX_TIME);",
+      "",
+      "if not RSClient.IsLoggedIn() then",
+      "  Exit(${1:EState}.LOGIN);",
+      "",
+      "if Chat.LeveledUp() then",
+      "  Exit(${1:EState}.LEVEL_UP);"
+    ],
+    "description": "Common GetState checks for activity, limits, login, and level-up"
+  },
+
+  "Progress Report Setup": {
+    "prefix": "progressreport",
+    "body": [
+      "ProgressReport.Setup(",
+      "  '${1:ScriptName}',",
+      "  [",
+      "    'Script runtime:', 'Botting runtime:', 'Antiban runtime:', 'Next sleep:',",
+      "    '${2:Actions:}'",
+      "  ],",
+      "  @Self.GetReportValues",
+      ");"
+    ],
+    "description": "Setup progress report with headers and callback"
+  },
+
+  "Config and Form Setup": {
+    "prefix": "configsetup",
+    "body": [
+      "var",
+      "  ${1:Script}: T${1:Script};",
+      "  ${1:Script}Form: TScriptForm;",
+      "  ${1:Script}Config: TConfigJSON;"
+    ],
+    "description": "TConfigJSON and TScriptForm variable declarations"
+  },
+
+  "RSObject Create": {
+    "prefix": "rsobject",
+    "body": [
+      "${1:MyObject}.Setup(0.6, 4, [[$2, $3]]);",
+      "${1:MyObject}.Setup([${4:'Action'}]);",
+      "${1:MyObject}.Finder.Colors += [CTS2(${5:color}, ${6:tolerance}, ${7:hue}, ${8:sat})];"
+    ],
+    "description": "TRSObject setup with coordinates, options, and color finder"
+  },
+
+  "Sleep Until": {
+    "prefix": "sleepuntil",
+    "body": [
+      "SleepUntil(${1:condition}, ${2:100}, ${3:5000});"
+    ],
+    "description": "SleepUntil(condition, interval, timeout)"
+  },
+
+  "Form OnStart Override": {
+    "prefix": "formstart",
+    "body": [
+      "procedure TScriptForm.OnStart(sender: TLazObject); override;",
+      "begin",
+      "  inherited;",
+      "",
+      "  ${1:Script}.MaxActions := Self.Goals.Actions.Value;",
+      "  ${1:Script}.MaxTime    := Self.Goals.Time.Value * ONE_MINUTE;",
+      "  ${1:Script}.MaxLevel   := Self.Goals.Level.Value;",
+      "",
+      "  ${1:Script}Config.Save();",
+      "end;"
+    ],
+    "description": "TScriptForm.OnStart override with goals and config save"
   }
 }

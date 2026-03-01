@@ -17,14 +17,25 @@ import {
     OutputChannel,
     WebviewPanel,
     ViewColumn,
-    Uri
+    Uri,
+    StatusBarItem,
+    StatusBarAlignment,
+    ThemeColor,
+    Task,
+    TaskDefinition,
+    TaskGroup,
+    TaskProvider,
+    TaskScope,
+    ShellExecution,
+    tasks
 } from 'vscode';
 
 import {
     LanguageClient,
     LanguageClientOptions,
     ServerOptions,
-    Executable
+    Executable,
+    State
 } from 'vscode-languageclient/node';
 
 let client: LanguageClient | undefined;
@@ -33,6 +44,11 @@ let scriptOutputChannel: OutputChannel;
 let runningScript: ChildProcess | undefined;
 let selectedTargetWindow: WindowInfo | undefined;
 let extensionContext: ExtensionContext | undefined;
+let lspStatusBar: StatusBarItem;
+let scriptStatusBar: StatusBarItem;
+let targetStatusBar: StatusBarItem;
+let scriptStartTime: number | undefined;
+let scriptTimerInterval: ReturnType<typeof setInterval> | undefined;
 
 /**
  * Check if verbose/debug logging is enabled for script output
@@ -1969,6 +1985,7 @@ async function startLanguageServer(context: ExtensionContext): Promise<void> {
         const message = 'Simba LSP server not found. Configure simba.lsp.simbaLspPath or simba.lsp.simbaPath in settings, or install SimbaLSP to ~/Simba/';
         outputChannel.appendLine(message);
         window.showWarningMessage(message);
+        updateLspStatus('error');
         return;
     }
 
@@ -2021,10 +2038,27 @@ async function startLanguageServer(context: ExtensionContext): Promise<void> {
         clientOptions
     );
 
+    // Track LSP state changes in status bar
+    client.onDidChangeState((e) => {
+        switch (e.newState) {
+            case State.Starting:
+                updateLspStatus('starting');
+                break;
+            case State.Running:
+                updateLspStatus('running');
+                break;
+            case State.Stopped:
+                updateLspStatus('stopped');
+                break;
+        }
+    });
+
+    updateLspStatus('starting');
     try {
         await client.start();
         outputChannel.appendLine('Simba Language Server started successfully');
     } catch (error) {
+        updateLspStatus('error');
         outputChannel.appendLine(`Failed to start Simba Language Server: ${error}`);
         window.showErrorMessage(`Failed to start Simba Language Server: ${error}`);
     }
@@ -2038,6 +2072,7 @@ async function stopLanguageServer(): Promise<void> {
         await client.stop();
         client = undefined;
     }
+    updateLspStatus('stopped');
 }
 
 /**
@@ -2106,10 +2141,111 @@ function findSimbaForRun(): string | undefined {
 }
 
 /**
+ * Create status bar items for LSP, script, and target window
+ */
+function createStatusBarItems(context: ExtensionContext): void {
+    // LSP Status (highest priority = leftmost)
+    lspStatusBar = window.createStatusBarItem(StatusBarAlignment.Left, 100);
+    lspStatusBar.command = 'simba.restartServer';
+    lspStatusBar.tooltip = 'Simba Language Server - Click to restart';
+    updateLspStatus('stopped');
+    lspStatusBar.show();
+    context.subscriptions.push(lspStatusBar);
+
+    // Script Status (hidden by default)
+    scriptStatusBar = window.createStatusBarItem(StatusBarAlignment.Left, 99);
+    scriptStatusBar.command = 'simba.stopScript';
+    scriptStatusBar.tooltip = 'Running script - Click to stop';
+    scriptStatusBar.hide();
+    context.subscriptions.push(scriptStatusBar);
+
+    // Target Window
+    targetStatusBar = window.createStatusBarItem(StatusBarAlignment.Left, 98);
+    targetStatusBar.command = 'simba.selectTargetWindow';
+    targetStatusBar.tooltip = 'Simba target window - Click to change';
+    updateTargetStatus();
+    targetStatusBar.show();
+    context.subscriptions.push(targetStatusBar);
+}
+
+/**
+ * Update LSP status bar indicator
+ */
+function updateLspStatus(state: 'starting' | 'running' | 'error' | 'disabled' | 'stopped'): void {
+    if (!lspStatusBar) { return; }
+    switch (state) {
+        case 'starting':
+            lspStatusBar.text = '$(sync~spin) Simba LSP';
+            lspStatusBar.backgroundColor = undefined;
+            break;
+        case 'running':
+            lspStatusBar.text = '$(check) Simba LSP';
+            lspStatusBar.backgroundColor = undefined;
+            break;
+        case 'error':
+            lspStatusBar.text = '$(error) Simba LSP';
+            lspStatusBar.backgroundColor = new ThemeColor('statusBarItem.errorBackground');
+            break;
+        case 'disabled':
+            lspStatusBar.text = '$(circle-slash) Simba LSP';
+            lspStatusBar.backgroundColor = undefined;
+            break;
+        case 'stopped':
+            lspStatusBar.text = '$(circle-slash) Simba LSP';
+            lspStatusBar.backgroundColor = undefined;
+            break;
+    }
+}
+
+/**
+ * Update script status bar with running state and elapsed timer
+ */
+function updateScriptStatus(running: boolean, filename?: string): void {
+    if (!scriptStatusBar) { return; }
+    if (running) {
+        scriptStartTime = Date.now();
+        scriptStatusBar.text = `$(play) Running: ${filename || 'script'}`;
+        scriptStatusBar.show();
+
+        // Start elapsed timer
+        if (scriptTimerInterval) { clearInterval(scriptTimerInterval); }
+        scriptTimerInterval = setInterval(() => {
+            if (scriptStartTime) {
+                const elapsed = Math.floor((Date.now() - scriptStartTime) / 1000);
+                const mins = Math.floor(elapsed / 60);
+                const secs = elapsed % 60;
+                const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                scriptStatusBar.text = `$(play) Running: ${filename || 'script'} (${timeStr})`;
+            }
+        }, 1000);
+    } else {
+        scriptStartTime = undefined;
+        if (scriptTimerInterval) {
+            clearInterval(scriptTimerInterval);
+            scriptTimerInterval = undefined;
+        }
+        scriptStatusBar.hide();
+    }
+}
+
+/**
+ * Update target window status bar
+ */
+function updateTargetStatus(): void {
+    if (!targetStatusBar) { return; }
+    if (selectedTargetWindow) {
+        targetStatusBar.text = `$(window) ${selectedTargetWindow.title}`;
+    } else {
+        targetStatusBar.text = '$(window) No Target';
+    }
+}
+
+/**
  * Update the scriptRunning context for menu visibility
  */
-function setScriptRunning(running: boolean): void {
+function setScriptRunning(running: boolean, filename?: string): void {
     commands.executeCommand('setContext', 'simba.scriptRunning', running);
+    updateScriptStatus(running, filename);
 }
 
 /**
@@ -2211,13 +2347,16 @@ async function selectTargetWindow(): Promise<void> {
                     processName: '',
                     pid: pidInput ? parseInt(pidInput, 10) : 0
                 };
+                updateTargetStatus();
                 window.showInformationMessage(`Target window set to handle: ${handleInput}${pidInput ? `, PID: ${pidInput}` : ''}`);
             }
         } else if (selected.action === 'clear') {
             selectedTargetWindow = undefined;
+            updateTargetStatus();
             window.showInformationMessage('Target window cleared');
         } else if (selected.window) {
             selectedTargetWindow = selected.window;
+            updateTargetStatus();
             window.showInformationMessage(`Target window set to: ${selected.window.title}`);
         }
     }
@@ -2283,19 +2422,20 @@ async function runScript(): Promise<void> {
 
     // If target window selected and on Windows, use IPC bridge
     const USE_IPC = true;
+    const scriptFilename = path.basename(scriptPath);
     if (selectedTargetWindow && os.platform() === 'win32' && USE_IPC) {
         logDebug('IPC Mode enabled for GetSimbaTargetWindow support');
-        await runScriptWithIPC(simbaPath, scriptPath, scriptDir, selectedTargetWindow.handle, selectedTargetWindow.pid);
+        await runScriptWithIPC(simbaPath, scriptPath, scriptDir, selectedTargetWindow.handle, selectedTargetWindow.pid, scriptFilename);
     } else {
         logDebug('IPC Mode disabled, using --target parameter only');
-        await runScriptDirect(simbaPath, scriptPath, scriptDir);
+        await runScriptDirect(simbaPath, scriptPath, scriptDir, scriptFilename);
     }
 }
 
 /**
  * Run script directly without IPC (simple mode)
  */
-async function runScriptDirect(simbaPath: string, scriptPath: string, scriptDir: string): Promise<void> {
+async function runScriptDirect(simbaPath: string, scriptPath: string, scriptDir: string, filename?: string): Promise<void> {
     const args: string[] = ['--run'];
     if (selectedTargetWindow) {
         args.push(`--target=${selectedTargetWindow.handle}`);
@@ -2307,7 +2447,7 @@ async function runScriptDirect(simbaPath: string, scriptPath: string, scriptDir:
             cwd: scriptDir
         });
 
-        setScriptRunning(true);
+        setScriptRunning(true, filename);
 
         runningScript.stdout?.on('data', (data: Buffer) => {
             scriptOutputChannel.append(data.toString());
@@ -2346,7 +2486,7 @@ async function runScriptDirect(simbaPath: string, scriptPath: string, scriptDir:
  * Run script with IPC bridge (for GetSimbaTargetWindow support)
  * Uses PowerShell to create pipes and bridge communication
  */
-async function runScriptWithIPC(simbaPath: string, scriptPath: string, scriptDir: string, targetHandle: string, targetPID: number): Promise<void> {
+async function runScriptWithIPC(simbaPath: string, scriptPath: string, scriptDir: string, targetHandle: string, targetPID: number, filename?: string): Promise<void> {
     // Create IPC server instance
     ipcServer = new SimbaIPCServer();
     ipcServer.setTargetWindow(targetHandle, targetPID);
@@ -2374,7 +2514,7 @@ async function runScriptWithIPC(simbaPath: string, scriptPath: string, scriptDir
             cwd: scriptDir
         });
 
-        setScriptRunning(true);
+        setScriptRunning(true, filename);
 
         // Set up output stream for sending IPC responses back to C# via stdin
         if (runningScript.stdin) {
@@ -2549,6 +2689,44 @@ function stopScript(): void {
 }
 
 /**
+ * Task provider for Simba compile and run tasks
+ */
+interface SimbaTaskDefinition extends TaskDefinition {
+    task: 'run' | 'compile';
+    file?: string;
+}
+
+class SimbaTaskProvider implements TaskProvider {
+    provideTasks(): Task[] {
+        return [
+            this.createTask('compile', 'simba: compile'),
+            this.createTask('run', 'simba: run')
+        ];
+    }
+
+    resolveTask(task: Task): Task | undefined {
+        const definition = task.definition as SimbaTaskDefinition;
+        if (definition.task) {
+            return this.createTask(definition.task, task.name, definition.file);
+        }
+        return undefined;
+    }
+
+    private createTask(taskType: 'run' | 'compile', name: string, file?: string): Task {
+        const definition: SimbaTaskDefinition = { type: 'simba', task: taskType, file };
+        const simbaPath = findSimbaForRun() || 'Simba';
+        const filePath = file || '${file}';
+        const flag = taskType === 'compile' ? '--compile' : '--run';
+        const execution = new ShellExecution(`"${simbaPath}" ${flag} "${filePath}"`);
+        const task = new Task(definition, TaskScope.Workspace, name, 'simba', execution, '$simba');
+        if (taskType === 'compile') {
+            task.group = TaskGroup.Build;
+        }
+        return task;
+    }
+}
+
+/**
  * Extension activation
  */
 export async function activate(context: ExtensionContext): Promise<void> {
@@ -2561,8 +2739,27 @@ export async function activate(context: ExtensionContext): Promise<void> {
         commands.registerCommand('simba.restartServer', () => restartLanguageServer(context)),
         commands.registerCommand('simba.runScript', runScript),
         commands.registerCommand('simba.stopScript', stopScript),
-        commands.registerCommand('simba.selectTargetWindow', selectTargetWindow)
+        commands.registerCommand('simba.selectTargetWindow', selectTargetWindow),
+        commands.registerCommand('simba.openWalkthrough', () => {
+            commands.executeCommand('workbench.action.openWalkthrough',
+                'villavu.simba-lang#simba-getting-started', false);
+        })
     );
+
+    // Auto-open walkthrough on first install
+    if (!context.globalState.get<boolean>('walkthroughShown', false)) {
+        context.globalState.update('walkthroughShown', true);
+        commands.executeCommand('workbench.action.openWalkthrough',
+            'villavu.simba-lang#simba-getting-started', true);
+    }
+
+    // Register task provider
+    context.subscriptions.push(
+        tasks.registerTaskProvider('simba', new SimbaTaskProvider())
+    );
+
+    // Create status bar items
+    createStatusBarItems(context);
 
     // Initialize script running state
     setScriptRunning(false);
@@ -2574,6 +2771,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
         await startLanguageServer(context);
     } else {
         outputChannel.appendLine('LSP is disabled in settings');
+        updateLspStatus('disabled');
     }
 
     // Watch for configuration changes
@@ -2585,6 +2783,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
                     await startLanguageServer(context);
                 } else if (!newLspEnabled && client) {
                     await stopLanguageServer();
+                    updateLspStatus('disabled');
                 } else if (newLspEnabled && client) {
                     // Path might have changed, restart
                     await restartLanguageServer(context);
@@ -2598,6 +2797,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
  * Extension deactivation
  */
 export async function deactivate(): Promise<void> {
+    // Clear script timer
+    if (scriptTimerInterval) {
+        clearInterval(scriptTimerInterval);
+        scriptTimerInterval = undefined;
+    }
+
     // Stop any running script
     if (runningScript) {
         runningScript.kill();

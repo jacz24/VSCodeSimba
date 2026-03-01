@@ -12,3 +12,6 @@ node_modules/**
 # Include LSP binaries
 !bin/**
 bin/.gitkeep
+
+# Include walkthrough media
+!media/**
