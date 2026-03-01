@@ -1963,10 +1963,15 @@ async function startLanguageServer(context: ExtensionContext): Promise<void> {
         return;
     }
 
+    // Determine if the path was manually configured or auto-detected
+    const configuredLspPath = workspace.getConfiguration('simba').get<string>('lsp.simbaLspPath', '');
+    const lspAutoDetected = !(configuredLspPath && configuredLspPath.length > 0 && fs.existsSync(configuredLspPath));
+    const lspPathInfo = { path: serverInfo.path, autoDetected: lspAutoDetected };
+
     if (serverInfo.isStandalone) {
-        outputChannel.appendLine(`Found standalone SimbaLSP at: ${serverInfo.path}`);
+        outputChannel.appendLine(`Found standalone SimbaLSP at: ${serverInfo.path} (${lspAutoDetected ? 'auto-detected' : 'configured'})`);
     } else {
-        outputChannel.appendLine(`Found Simba at: ${serverInfo.path} (using --lsp mode)`);
+        outputChannel.appendLine(`Found Simba at: ${serverInfo.path} (using --lsp mode, ${lspAutoDetected ? 'auto-detected' : 'configured'})`);
     }
 
     // Get include paths
@@ -2016,23 +2021,23 @@ async function startLanguageServer(context: ExtensionContext): Promise<void> {
     client.onDidChangeState((e) => {
         switch (e.newState) {
             case State.Starting:
-                updateLspStatus('starting');
+                updateLspStatus('starting', lspPathInfo);
                 break;
             case State.Running:
-                updateLspStatus('running');
+                updateLspStatus('running', lspPathInfo);
                 break;
             case State.Stopped:
-                updateLspStatus('stopped');
+                updateLspStatus('stopped', lspPathInfo);
                 break;
         }
     });
 
-    updateLspStatus('starting');
+    updateLspStatus('starting', lspPathInfo);
     try {
         await client.start();
         outputChannel.appendLine('Simba Language Server started successfully');
     } catch (error) {
-        updateLspStatus('error');
+        updateLspStatus('error', lspPathInfo);
         outputChannel.appendLine(`Failed to start Simba Language Server: ${error}`);
         window.showErrorMessage(`Failed to start Simba Language Server: ${error}`);
     }
@@ -2111,28 +2116,36 @@ function createStatusBarItems(context: ExtensionContext): void {
 
 /**
  * Update LSP status bar indicator
+ * @param pathInfo - optional resolved path and whether it was auto-detected
  */
-function updateLspStatus(state: 'starting' | 'running' | 'error' | 'disabled' | 'stopped'): void {
+function updateLspStatus(state: 'starting' | 'running' | 'error' | 'disabled' | 'stopped', pathInfo?: { path: string; autoDetected: boolean }): void {
     if (!lspStatusBar) { return; }
+    const source = pathInfo ? (pathInfo.autoDetected ? 'auto-detected' : 'configured') : '';
+    const pathLine = pathInfo ? `\n${pathInfo.path} (${source})` : '';
     switch (state) {
         case 'starting':
             lspStatusBar.text = '$(sync~spin) Simba LSP';
+            lspStatusBar.tooltip = `Simba LSP: Starting...${pathLine}\nClick to restart`;
             lspStatusBar.backgroundColor = undefined;
             break;
         case 'running':
             lspStatusBar.text = '$(check) Simba LSP';
+            lspStatusBar.tooltip = `Simba LSP: Running${pathLine}\nClick to restart`;
             lspStatusBar.backgroundColor = undefined;
             break;
         case 'error':
             lspStatusBar.text = '$(error) Simba LSP';
+            lspStatusBar.tooltip = `Simba LSP: Error${pathLine || '\nNo binary found'}\nClick to restart`;
             lspStatusBar.backgroundColor = new ThemeColor('statusBarItem.errorBackground');
             break;
         case 'disabled':
             lspStatusBar.text = '$(circle-slash) Simba LSP';
+            lspStatusBar.tooltip = 'Simba LSP: Disabled in settings\nClick to restart';
             lspStatusBar.backgroundColor = undefined;
             break;
         case 'stopped':
             lspStatusBar.text = '$(circle-slash) Simba LSP';
+            lspStatusBar.tooltip = 'Simba LSP: Stopped\nClick to restart';
             lspStatusBar.backgroundColor = undefined;
             break;
     }
@@ -2141,11 +2154,18 @@ function updateLspStatus(state: 'starting' | 'running' | 'error' | 'disabled' | 
 /**
  * Update script status bar with running state and elapsed timer
  */
-function updateScriptStatus(running: boolean, filename?: string): void {
+function updateScriptStatus(running: boolean, filename?: string, simbaPath?: string): void {
     if (!scriptStatusBar) { return; }
     if (running) {
         scriptStartTime = Date.now();
         scriptStatusBar.text = `$(play) Running: ${filename || 'script'}`;
+        if (simbaPath) {
+            const configuredRunPath = workspace.getConfiguration('simba').get<string>('runPath', '');
+            const source = (configuredRunPath && configuredRunPath.length > 0 && fs.existsSync(configuredRunPath)) ? 'configured' : 'auto-detected';
+            scriptStatusBar.tooltip = `Running: ${filename || 'script'}\nSimba: ${simbaPath} (${source})\nClick to stop`;
+        } else {
+            scriptStatusBar.tooltip = 'Running script - Click to stop';
+        }
         scriptStatusBar.show();
 
         // Start elapsed timer
@@ -2184,9 +2204,9 @@ function updateTargetStatus(): void {
 /**
  * Update the scriptRunning context for menu visibility
  */
-function setScriptRunning(running: boolean, filename?: string): void {
+function setScriptRunning(running: boolean, filename?: string, simbaPath?: string): void {
     commands.executeCommand('setContext', 'simba.scriptRunning', running);
-    updateScriptStatus(running, filename);
+    updateScriptStatus(running, filename, simbaPath);
 }
 
 /**
@@ -2388,7 +2408,7 @@ async function runScriptDirect(simbaPath: string, scriptPath: string, scriptDir:
             cwd: scriptDir
         });
 
-        setScriptRunning(true, filename);
+        setScriptRunning(true, filename, simbaPath);
 
         runningScript.stdout?.on('data', (data: Buffer) => {
             scriptOutputChannel.append(data.toString());
@@ -2455,7 +2475,7 @@ async function runScriptWithIPC(simbaPath: string, scriptPath: string, scriptDir
             cwd: scriptDir
         });
 
-        setScriptRunning(true, filename);
+        setScriptRunning(true, filename, simbaPath);
 
         // Set up output stream for sending IPC responses back to C# via stdin
         if (runningScript.stdin) {
