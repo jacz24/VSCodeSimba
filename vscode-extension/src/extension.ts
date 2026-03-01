@@ -1880,12 +1880,12 @@ function getIncludePaths(simbaPath: string): string[] {
 
 /**
  * Find the LSP server executable path
- * Priority: 1. Configured SimbaLSP, 2. Configured Simba, 3. Auto-detect SimbaLSP, 4. Auto-detect Simba
+ * Priority: 1. Configured SimbaLSP, 2. Auto-detect SimbaLSP, 3. Auto-detect Simba
  */
 function findLspServer(): LspServerInfo | undefined {
     const config = workspace.getConfiguration('simba');
 
-    // 1. Check for configured standalone SimbaLSP path (preferred)
+    // 1. Check for configured SimbaLSP path
     const simbaLspPath = config.get<string>('lsp.simbaLspPath', '');
     logVerbose(`Checking simbaLspPath: "${simbaLspPath}"`);
     if (simbaLspPath && simbaLspPath.length > 0) {
@@ -1897,19 +1897,7 @@ function findLspServer(): LspServerInfo | undefined {
         }
     }
 
-    // 2. Check for configured full Simba path
-    const simbaPath = config.get<string>('lsp.simbaPath', '');
-    logVerbose(`Checking simbaPath: "${simbaPath}"`);
-    if (simbaPath && simbaPath.length > 0) {
-        if (fs.existsSync(simbaPath)) {
-            logVerbose(`Using configured Simba: ${simbaPath}`);
-            return { path: simbaPath, isStandalone: false, simbaPath: path.dirname(simbaPath) };
-        } else {
-            logVerbose(`Configured Simba not found at: ${simbaPath}`);
-        }
-    }
-
-    // 3. Auto-detect from platform-specific default locations
+    // 2. Auto-detect from platform-specific default locations
     const platform = os.platform();
 
     // Standalone SimbaLSP paths (preferred - lightweight console app)
@@ -1982,7 +1970,7 @@ async function startLanguageServer(context: ExtensionContext): Promise<void> {
     const serverInfo = findLspServer();
 
     if (!serverInfo) {
-        const message = 'Simba LSP server not found. Configure simba.lsp.simbaLspPath or simba.lsp.simbaPath in settings, or install SimbaLSP to ~/Simba/';
+        const message = 'Simba LSP server not found. Configure simba.lsp.simbaLspPath in settings, or install SimbaLSP to ~/Simba/';
         outputChannel.appendLine(message);
         window.showWarningMessage(message);
         updateLspStatus('error');
@@ -2086,7 +2074,7 @@ async function restartLanguageServer(context: ExtensionContext): Promise<void> {
 
 /**
  * Find Simba binary for running scripts
- * Priority: 1. Configured runPath, 2. Configured simbaPath, 3. Auto-detect
+ * Priority: 1. Configured runPath, 2. Auto-detect
  */
 function findSimbaForRun(): string | undefined {
     const config = workspace.getConfiguration('simba');
@@ -2097,13 +2085,7 @@ function findSimbaForRun(): string | undefined {
         return runPath;
     }
 
-    // 2. Check for configured simbaPath (from LSP settings)
-    const simbaPath = config.get<string>('lsp.simbaPath', '');
-    if (simbaPath && simbaPath.length > 0 && fs.existsSync(simbaPath)) {
-        return simbaPath;
-    }
-
-    // 3. Auto-detect from platform-specific default locations
+    // 2. Auto-detect from platform-specific default locations
     const platform = os.platform();
     const simbaPaths: string[] = [];
 

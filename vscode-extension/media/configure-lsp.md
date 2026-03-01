@@ -2,9 +2,9 @@
 
 The Simba Language Server provides code intelligence features like autocomplete, go-to-definition, and diagnostics.
 
-## Option 1: Standalone SimbaLSP (Recommended)
+## Configuration
 
-Set the path to the standalone `SimbaLSP` binary:
+Set the path to the `SimbaLSP` binary:
 
 ```json
 {
@@ -12,15 +12,7 @@ Set the path to the standalone `SimbaLSP` binary:
 }
 ```
 
-## Option 2: Full Simba with --lsp flag
-
-If you don't have the standalone LSP, the extension can use the full Simba binary:
-
-```json
-{
-  "simba.lsp.simbaPath": "C:\\Path\\To\\Simba.exe"
-}
-```
+If left empty, the extension will auto-detect SimbaLSP from common install locations.
 
 ## Disabling LSP
 

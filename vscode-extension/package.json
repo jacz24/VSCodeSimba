@@ -64,12 +64,7 @@
         "simba.lsp.simbaLspPath": {
           "type": "string",
           "default": "",
-          "description": "Path to standalone SimbaLSP binary. This is the preferred LSP server - a lightweight console application. Leave empty to auto-detect."
-        },
-        "simba.lsp.simbaPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to full Simba binary (will use --lsp flag). Only used if SimbaLSP is not found. Leave empty to auto-detect."
+          "description": "Path to the SimbaLSP binary. Leave empty to auto-detect."
         },
         "simba.lsp.trace.server": {
           "type": "string",
@@ -92,7 +87,7 @@
         "simba.runPath": {
           "type": "string",
           "default": "",
-          "description": "Path to Simba binary for running scripts. Leave empty to auto-detect or use the same path as simba.lsp.simbaPath."
+          "description": "Path to Simba binary for running scripts. Leave empty to auto-detect."
         }
       }
     },
