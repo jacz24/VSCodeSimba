@@ -1879,6 +1879,40 @@ function getIncludePaths(simbaPath: string): string[] {
 }
 
 /**
+ * Get the Wasp Launcher Simba directory path (cross-platform)
+ * Returns: %LOCALAPPDATA%/com.wasp-launcher.app/Simba on Windows
+ */
+function getWaspLauncherDir(): string | undefined {
+    if (os.platform() !== 'win32') { return undefined; }
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    const dir = path.join(localAppData, 'com.wasp-launcher.app', 'Simba');
+    return fs.existsSync(dir) ? dir : undefined;
+}
+
+/**
+ * Find the newest file matching a prefix in a directory (e.g. "Simba-" → "Simba-a7c9ac62d6.exe")
+ * The Wasp Launcher uses hashed filenames that change on updates.
+ */
+function findNewestBinary(dir: string, prefix: string, ext: string): string | undefined {
+    try {
+        const entries = fs.readdirSync(dir);
+        let best: { name: string; mtime: number } | undefined;
+        for (const entry of entries) {
+            if (entry.startsWith(prefix) && entry.endsWith(ext)) {
+                const fullPath = path.join(dir, entry);
+                const stat = fs.statSync(fullPath);
+                if (!best || stat.mtimeMs > best.mtime) {
+                    best = { name: fullPath, mtime: stat.mtimeMs };
+                }
+            }
+        }
+        return best?.name;
+    } catch {
+        return undefined;
+    }
+}
+
+/**
  * Find the LSP server executable path
  * Priority: 1. Configured SimbaLSP, 2. Auto-detect SimbaLSP, 3. Auto-detect Simba
  */
@@ -1897,66 +1931,18 @@ function findLspServer(): LspServerInfo | undefined {
         }
     }
 
-    // 2. Auto-detect from platform-specific default locations
-    const platform = os.platform();
-
-    // Standalone SimbaLSP paths (preferred - lightweight console app)
-    const standalonePaths: string[] = [];
-    // Full Simba paths (fallback - uses --lsp flag)
-    const simbaPaths: string[] = [];
-
-    if (platform === 'win32') {
-        standalonePaths.push(
-            path.join(os.homedir(), 'Simba', 'SimbaLSP.exe'),
-            path.join(os.homedir(), 'Simba64', 'SimbaLSP.exe'),
-            'C:\\Simba\\SimbaLSP.exe',
-            'C:\\Program Files\\Simba\\SimbaLSP.exe'
-        );
-        simbaPaths.push(
-            path.join(os.homedir(), 'Simba', 'Simba.exe'),
-            path.join(os.homedir(), 'Simba64', 'Simba.exe'),
-            'C:\\Simba\\Simba.exe',
-            'C:\\Program Files\\Simba\\Simba.exe',
-            'C:\\Program Files (x86)\\Simba\\Simba.exe'
-        );
-    } else if (platform === 'darwin') {
-        standalonePaths.push(
-            path.join(os.homedir(), 'Simba', 'SimbaLSP'),
-            '/Applications/Simba.app/Contents/MacOS/SimbaLSP',
-            '/usr/local/bin/simbalsp'
-        );
-        simbaPaths.push(
-            path.join(os.homedir(), 'Simba', 'Simba'),
-            '/Applications/Simba.app/Contents/MacOS/Simba',
-            '/usr/local/bin/simba'
-        );
-    } else {
-        // Linux
-        standalonePaths.push(
-            path.join(os.homedir(), 'Simba', 'SimbaLSP'),
-            '/usr/local/bin/simbalsp',
-            '/usr/bin/simbalsp',
-            '/opt/simba/SimbaLSP'
-        );
-        simbaPaths.push(
-            path.join(os.homedir(), 'Simba', 'Simba'),
-            '/usr/local/bin/simba',
-            '/usr/bin/simba',
-            '/opt/simba/Simba'
-        );
-    }
-
-    // Check standalone SimbaLSP first (preferred)
-    for (const p of standalonePaths) {
-        if (fs.existsSync(p)) {
-            return { path: p, isStandalone: true, simbaPath: path.dirname(p) };
+    // 2. Auto-detect from Wasp Launcher directory (hashed binary names)
+    const waspDir = getWaspLauncherDir();
+    if (waspDir) {
+        const lsp = findNewestBinary(waspDir, 'SimbaLSP', '.exe');
+        if (lsp) {
+            logVerbose(`Found Wasp Launcher SimbaLSP: ${lsp}`);
+            return { path: lsp, isStandalone: true, simbaPath: waspDir };
         }
-    }
-
-    // Fall back to full Simba with --lsp flag
-    for (const p of simbaPaths) {
-        if (fs.existsSync(p)) {
-            return { path: p, isStandalone: false, simbaPath: path.dirname(p) };
+        const simba = findNewestBinary(waspDir, 'Simba-', '.exe');
+        if (simba) {
+            logVerbose(`Found Wasp Launcher Simba: ${simba}`);
+            return { path: simba, isStandalone: false, simbaPath: waspDir };
         }
     }
 
@@ -2085,38 +2071,11 @@ function findSimbaForRun(): string | undefined {
         return runPath;
     }
 
-    // 2. Auto-detect from platform-specific default locations
-    const platform = os.platform();
-    const simbaPaths: string[] = [];
-
-    if (platform === 'win32') {
-        simbaPaths.push(
-            path.join(os.homedir(), 'Simba', 'Simba.exe'),
-            path.join(os.homedir(), 'Simba64', 'Simba.exe'),
-            'C:\\Simba\\Simba.exe',
-            'C:\\Program Files\\Simba\\Simba.exe',
-            'C:\\Program Files (x86)\\Simba\\Simba.exe'
-        );
-    } else if (platform === 'darwin') {
-        simbaPaths.push(
-            path.join(os.homedir(), 'Simba', 'Simba'),
-            '/Applications/Simba.app/Contents/MacOS/Simba',
-            '/usr/local/bin/simba'
-        );
-    } else {
-        // Linux
-        simbaPaths.push(
-            path.join(os.homedir(), 'Simba', 'Simba'),
-            '/usr/local/bin/simba',
-            '/usr/bin/simba',
-            '/opt/simba/Simba'
-        );
-    }
-
-    for (const p of simbaPaths) {
-        if (fs.existsSync(p)) {
-            return p;
-        }
+    // 2. Auto-detect from Wasp Launcher directory (hashed binary names)
+    const waspDir = getWaspLauncherDir();
+    if (waspDir) {
+        const simba = findNewestBinary(waspDir, 'Simba-', '.exe');
+        if (simba) { return simba; }
     }
 
     return undefined;
