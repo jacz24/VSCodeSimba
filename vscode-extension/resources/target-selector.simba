@@ -1,0 +1,199 @@
+{
+  Visual Window Target Selector for VSCode Simba Extension.
+
+  Spawned via: Simba.exe --run target-selector.simba
+  Provides a visual window picker with green border highlight.
+  Outputs selection result to stdout for the extension to parse.
+
+  Output format:
+    SELECTED|<handle>|<title>|<pid>|<className>
+    CANCELLED
+}
+
+const
+  BORDER_SIZE = 4;
+  POLL_INTERVAL = 50;
+  VK_RETURN: Int16 = 13;
+  VK_ESCAPE: Int16 = 27;
+  INSTRUCTION_WIDTH = 420;
+  INSTRUCTION_HEIGHT = 60;
+
+var
+  LeftForm, RightForm, TopForm, BottomForm: TLazForm;
+  InstructionForm: TLazForm;
+  InstructionLabel: TLazLabel;
+  PollTimer: TLazTimer;
+  OwnHandles: TWindowHandleArray;
+  LastWindow: TWindowHandle;
+  Finished: Boolean;
+
+function CreateBorderForm: TLazForm;
+begin
+  Result := TLazForm.Create();
+  Result.BorderStyle := ELazFormBorderStyle.None;
+  Result.ShowInTaskBar := ELazFormShowInTaskbar.Never;
+  Result.StayOnTop := True;
+  Result.Color := Colors.GREEN;
+  Result.SetBounds(0, 0, 0, 0);
+  Result.Show();
+
+  OwnHandles += [TWindowHandle(Result.Handle)];
+end;
+
+function IsOwnHandle(Win: TWindowHandle): Boolean;
+var
+  I: Int32;
+begin
+  Result := False;
+  for I := 0 to High(OwnHandles) do
+    if OwnHandles[I] = Win then
+      Exit(True);
+end;
+
+procedure HighlightWindow(Win: TWindowHandle);
+var
+  B: TBox;
+begin
+  B := Win.GetBounds();
+
+  LeftForm.SetBounds(B.X1 - BORDER_SIZE, B.Y1 - BORDER_SIZE, BORDER_SIZE, B.Y2 - B.Y1 + (BORDER_SIZE * 2));
+  RightForm.SetBounds(B.X2, B.Y1 - BORDER_SIZE, BORDER_SIZE, B.Y2 - B.Y1 + (BORDER_SIZE * 2));
+  TopForm.SetBounds(B.X1, B.Y1 - BORDER_SIZE, B.X2 - B.X1, BORDER_SIZE);
+  BottomForm.SetBounds(B.X1, B.Y2, B.X2 - B.X1, BORDER_SIZE);
+end;
+
+procedure HideBorders;
+begin
+  LeftForm.SetBounds(0, 0, 0, 0);
+  RightForm.SetBounds(0, 0, 0, 0);
+  TopForm.SetBounds(0, 0, 0, 0);
+  BottomForm.SetBounds(0, 0, 0, 0);
+end;
+
+procedure SelectCurrentWindow;
+var
+  Title, ClassName: String;
+  PID: UInt32;
+begin
+  if (LastWindow = 0) or (not LastWindow.IsValid()) then
+    Exit;
+
+  Title := LastWindow.GetTitle();
+  ClassName := LastWindow.GetClassName();
+  PID := LastWindow.GetPID();
+
+  WriteLn('SELECTED|' + ToStr(LastWindow) + '|' + Title + '|' + ToStr(PID) + '|' + ClassName);
+
+  Finished := True;
+  PollTimer.Enabled := False;
+  HideBorders();
+  InstructionForm.Close();
+end;
+
+procedure DoCancel;
+begin
+  WriteLn('CANCELLED');
+  Finished := True;
+  PollTimer.Enabled := False;
+  HideBorders();
+end;
+
+procedure CancelSelection;
+begin
+  DoCancel();
+  InstructionForm.Close();
+end;
+
+procedure OnPollTimer(Sender: TLazObject);
+var
+  Win: TWindowHandle;
+begin
+  if Finished then
+    Exit;
+
+  Win := GetWindowAtCursor();
+
+  // Filter out our own form handles
+  if IsOwnHandle(Win) then
+    Exit;
+
+  if (Win <> 0) and (Win <> LastWindow) then
+  begin
+    LastWindow := Win;
+    HighlightWindow(Win);
+    InstructionForm.Caption := 'Target: ' + Win.GetTitle();
+  end
+  else if (Win = 0) then
+  begin
+    LastWindow := 0;
+    HideBorders();
+    InstructionForm.Caption := 'Target Selector';
+  end;
+end;
+
+procedure OnFormKeyDown(Sender: TLazObject; var Key: Int16; Shift: ELazShiftStates);
+begin
+  if Finished then
+    Exit;
+
+  if Key = VK_RETURN then
+    SelectCurrentWindow()
+  else if Key = VK_ESCAPE then
+    CancelSelection();
+end;
+
+procedure OnFormClose(Sender: TLazObject; var CloseAction: ELazFormCloseAction);
+begin
+  if not Finished then
+    DoCancel();
+
+  CloseAction := ELazFormCloseAction.Free;
+end;
+
+procedure SetupForms;
+begin
+  OwnHandles := [];
+  LastWindow := 0;
+  Finished := False;
+
+  // Create the 4 green border forms
+  LeftForm := CreateBorderForm();
+  RightForm := CreateBorderForm();
+  TopForm := CreateBorderForm();
+  BottomForm := CreateBorderForm();
+
+  // Create instruction form
+  InstructionForm := TLazForm.Create();
+  InstructionForm.Caption := 'Target Selector';
+  InstructionForm.BorderStyle := ELazFormBorderStyle.ToolWindow;
+  InstructionForm.ShowInTaskBar := ELazFormShowInTaskbar.Never;
+  InstructionForm.StayOnTop := True;
+  InstructionForm.Position := ELazFormPosition.ScreenCenter;
+  InstructionForm.SetBounds(0, 0, INSTRUCTION_WIDTH, INSTRUCTION_HEIGHT);
+  InstructionForm.KeyPreview := True;
+  InstructionForm.OnKeyDown := @OnFormKeyDown;
+  InstructionForm.OnClose := @OnFormClose;
+
+  OwnHandles += [TWindowHandle(InstructionForm.Handle)];
+
+  // Create instruction label
+  InstructionLabel := TLazLabel.Create(InstructionForm);
+  InstructionLabel.Parent := InstructionForm;
+  InstructionLabel.Caption := 'Hover over target window, press ENTER to select.' + LINE_SEP + 'Press ESCAPE to cancel.';
+  InstructionLabel.Align := ELazAlign.Client;
+  InstructionLabel.Alignment := ELazAlignment.Center;
+  InstructionLabel.Layout := ELazTextLayout.Center;
+  InstructionLabel.WordWrap := True;
+
+  // Create poll timer
+  PollTimer := TLazTimer.Create(InstructionForm);
+  PollTimer.Interval := POLL_INTERVAL;
+  PollTimer.OnTimer := @OnPollTimer;
+  PollTimer.Enabled := True;
+
+  InstructionForm.ShowModal();
+end;
+
+begin
+  SetupForms();
+end.
