@@ -1706,7 +1706,7 @@ async function getOpenWindows(): Promise<WindowInfo[]> {
                                         GetWindowThreadProcessId(hWnd, out pid);
                                         string procName = "";
                                         try { procName = Process.GetProcessById((int)pid).ProcessName; } catch {}
-                                        result.Add(hWnd.ToInt64() + "|" + title + "|" + procName + "|" + pid);
+                                        result.Add(((UInt64)(Int64)hWnd).ToString() + "|" + title + "|" + procName + "|" + pid);
                                     }
                                 }
                                 return true;
