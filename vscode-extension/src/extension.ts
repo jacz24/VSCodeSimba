@@ -2210,6 +2210,86 @@ function setScriptRunning(running: boolean, filename?: string, simbaPath?: strin
 }
 
 /**
+ * Launch Simba's visual window picker (hover + Enter) and return the selected window.
+ * The picker script writes a line: SELECTED|handle|title|pid|className
+ */
+async function pickTargetFromScreen(): Promise<WindowInfo | undefined> {
+    const simbaPath = findSimbaForRun();
+    if (!simbaPath) {
+        const action = await window.showErrorMessage(
+            'Simba binary not found. Configure simba.runPath or install via Wasp Launcher.',
+            'Open Settings'
+        );
+        if (action === 'Open Settings') {
+            commands.executeCommand('workbench.action.openSettings', 'simba.runPath');
+        }
+        return undefined;
+    }
+
+    const pickerScript = path.join(extensionContext!.extensionPath, 'resources', 'target-selector.simba');
+    if (!fs.existsSync(pickerScript)) {
+        window.showErrorMessage(`Picker script not found: ${pickerScript}`);
+        return undefined;
+    }
+
+    return new Promise<WindowInfo | undefined>((resolve) => {
+        let stdout = '';
+        let resolved = false;
+
+        const proc = spawn(simbaPath, ['--run', pickerScript]);
+
+        const timeout = setTimeout(() => {
+            if (!resolved) {
+                resolved = true;
+                proc.kill();
+                window.showWarningMessage('Window picker timed out after 30 seconds.');
+                resolve(undefined);
+            }
+        }, 30000);
+
+        proc.stdout?.on('data', (data: Buffer) => {
+            stdout += data.toString();
+        });
+
+        proc.on('close', () => {
+            clearTimeout(timeout);
+            if (resolved) { return; }
+            resolved = true;
+
+            // Look for the SELECTED| line in stdout
+            const lines = stdout.split('\n');
+            for (const line of lines) {
+                const trimmed = stripSimbaDebugFlags(line).trim();
+                if (trimmed.startsWith('SELECTED|')) {
+                    const parts = trimmed.split('|');
+                    // Format: SELECTED|handle|title|pid|className
+                    if (parts.length >= 4) {
+                        resolve({
+                            handle: parts[1],
+                            title: parts[2] || '(Untitled)',
+                            processName: parts.length >= 5 ? parts[4] : '',
+                            pid: parseInt(parts[3], 10) || 0
+                        });
+                        return;
+                    }
+                }
+            }
+            // No valid selection found (user cancelled or script error)
+            resolve(undefined);
+        });
+
+        proc.on('error', (err) => {
+            clearTimeout(timeout);
+            if (!resolved) {
+                resolved = true;
+                window.showErrorMessage(`Failed to launch picker: ${err.message}`);
+                resolve(undefined);
+            }
+        });
+    });
+}
+
+/**
  * Select target window from list of open windows
  */
 async function selectTargetWindow(): Promise<void> {
