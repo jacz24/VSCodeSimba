@@ -2293,113 +2293,126 @@ async function pickTargetFromScreen(): Promise<WindowInfo | undefined> {
  * Select target window from list of open windows
  */
 async function selectTargetWindow(): Promise<void> {
-    const windows = await getOpenWindows();
-
-    // Create quick pick items
-    const items: Array<{
-        label: string;
-        description: string;
-        detail: string;
-        window: WindowInfo | undefined;
-        action?: string;
-    }> = [];
-
-    // Add option to enter handle manually (useful for child windows like SunAwtCanvas)
-    items.push({
-        label: '$(edit) Enter Handle Manually',
-        description: 'Paste a window handle from Simba\'s target selector',
-        detail: 'Use this for child windows (like Java canvas) that don\'t appear in the list',
-        window: undefined,
-        action: 'manual'
+    // First Quick Pick: choose how to select a target
+    const method = await window.showQuickPick([
+        {
+            label: '$(target) Pick from Screen',
+            action: 'pick',
+            description: 'Visual picker with green highlight',
+            detail: 'Launches Simba\'s window picker \u2014 hover over a window and press Enter'
+        },
+        {
+            label: '$(list-flat) Select from List',
+            action: 'list',
+            description: 'Choose from detected windows',
+            detail: 'Shows all visible windows'
+        },
+        {
+            label: '$(edit) Enter Handle Manually',
+            action: 'manual',
+            description: 'Paste a window handle',
+            detail: 'For child windows (like Java canvas) not in the list'
+        },
+        {
+            label: '$(x) Clear Target Window',
+            action: 'clear',
+            description: 'Run scripts without a specific target',
+            detail: ''
+        }
+    ], {
+        placeHolder: 'How do you want to select a target window?'
     });
 
-    // Add option to clear target
-    items.push({
-        label: '$(x) Clear Target Window',
-        description: 'Run scripts without a specific target',
-        detail: '',
-        window: undefined,
-        action: 'clear'
-    });
+    if (!method) { return; }
 
-    // Add detected windows
-    for (const w of windows) {
-        items.push({
+    if (method.action === 'pick') {
+        const result = await pickTargetFromScreen();
+        if (result) {
+            selectedTargetWindow = result;
+            updateTargetStatus();
+            window.showInformationMessage(`Target window set to: ${result.title} (handle ${result.handle})`);
+        }
+    } else if (method.action === 'list') {
+        const windows = await getOpenWindows();
+        if (windows.length === 0) {
+            window.showWarningMessage('No visible windows detected.');
+            return;
+        }
+
+        const items = windows.map(w => ({
             label: w.title || '(Untitled)',
             description: w.processName ? `(${w.processName})` : '',
             detail: `Handle: ${w.handle}`,
             window: w
+        }));
+
+        const selected = await window.showQuickPick(items, {
+            placeHolder: 'Select a window',
+            matchOnDescription: true,
+            matchOnDetail: true
         });
-    }
 
-    const selected = await window.showQuickPick(items, {
-        placeHolder: 'Select target window for Simba scripts',
-        matchOnDescription: true,
-        matchOnDetail: true
-    });
+        if (selected) {
+            selectedTargetWindow = selected.window;
+            updateTargetStatus();
+            window.showInformationMessage(`Target window set to: ${selected.window.title}`);
+        }
+    } else if (method.action === 'manual') {
+        // Get last entered values from global state
+        const lastHandle = extensionContext?.globalState.get<string>('lastManualHandle', '');
+        const lastPid = extensionContext?.globalState.get<string>('lastManualPid', '');
 
-    if (selected) {
-        if (selected.action === 'manual') {
-            // Get last entered values from global state
-            const lastHandle = extensionContext?.globalState.get<string>('lastManualHandle', '');
-            const lastPid = extensionContext?.globalState.get<string>('lastManualPid', '');
+        // Prompt for manual handle input
+        const handleInput = await window.showInputBox({
+            prompt: 'Enter window handle (from Simba\'s target selector)',
+            placeHolder: 'e.g., 13174842',
+            value: lastHandle,
+            valueSelection: lastHandle ? [0, lastHandle.length] : undefined,
+            validateInput: (value) => {
+                if (!value) {
+                    return 'Handle is required';
+                }
+                if (!/^\d+$/.test(value)) {
+                    return 'Handle must be a number';
+                }
+                return null;
+            }
+        });
 
-            // Prompt for manual handle input
-            const handleInput = await window.showInputBox({
-                prompt: 'Enter window handle (from Simba\'s target selector)',
-                placeHolder: 'e.g., 13174842',
-                value: lastHandle,
-                valueSelection: lastHandle ? [0, lastHandle.length] : undefined,
+        if (handleInput) {
+            // Save handle to global state
+            await extensionContext?.globalState.update('lastManualHandle', handleInput);
+
+            // Also prompt for PID (optional but recommended for WaspLib)
+            const pidInput = await window.showInputBox({
+                prompt: 'Enter process ID (PID) - optional but recommended for WaspLib',
+                placeHolder: 'e.g., 24392 (leave empty if unknown)',
+                value: lastPid,
+                valueSelection: lastPid ? [0, lastPid.length] : undefined,
                 validateInput: (value) => {
-                    if (!value) {
-                        return 'Handle is required';
-                    }
-                    if (!/^\d+$/.test(value)) {
-                        return 'Handle must be a number';
+                    if (value && !/^\d+$/.test(value)) {
+                        return 'PID must be a number';
                     }
                     return null;
                 }
             });
 
-            if (handleInput) {
-                // Save handle to global state
-                await extensionContext?.globalState.update('lastManualHandle', handleInput);
+            // Save PID to global state (even if empty)
+            await extensionContext?.globalState.update('lastManualPid', pidInput || '');
 
-                // Also prompt for PID (optional but recommended for WaspLib)
-                const pidInput = await window.showInputBox({
-                    prompt: 'Enter process ID (PID) - optional but recommended for WaspLib',
-                    placeHolder: 'e.g., 24392 (leave empty if unknown)',
-                    value: lastPid,
-                    valueSelection: lastPid ? [0, lastPid.length] : undefined,
-                    validateInput: (value) => {
-                        if (value && !/^\d+$/.test(value)) {
-                            return 'PID must be a number';
-                        }
-                        return null;
-                    }
-                });
-
-                // Save PID to global state (even if empty)
-                await extensionContext?.globalState.update('lastManualPid', pidInput || '');
-
-                selectedTargetWindow = {
-                    handle: handleInput,
-                    title: `Manual (${handleInput})`,
-                    processName: '',
-                    pid: pidInput ? parseInt(pidInput, 10) : 0
-                };
-                updateTargetStatus();
-                window.showInformationMessage(`Target window set to handle: ${handleInput}${pidInput ? `, PID: ${pidInput}` : ''}`);
-            }
-        } else if (selected.action === 'clear') {
-            selectedTargetWindow = undefined;
+            selectedTargetWindow = {
+                handle: handleInput,
+                title: `Manual (${handleInput})`,
+                processName: '',
+                pid: pidInput ? parseInt(pidInput, 10) : 0
+            };
             updateTargetStatus();
-            window.showInformationMessage('Target window cleared');
-        } else if (selected.window) {
-            selectedTargetWindow = selected.window;
-            updateTargetStatus();
-            window.showInformationMessage(`Target window set to: ${selected.window.title}`);
+            window.showInformationMessage(`Target window set to handle: ${handleInput}${pidInput ? `, PID: ${pidInput}` : ''}`);
         }
+    } else if (method.action === 'clear') {
+        selectedTargetWindow = undefined;
+        updateTargetStatus();
+        window.showInformationMessage('Target window cleared');
     }
 }
 
