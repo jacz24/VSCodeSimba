@@ -15,3 +15,6 @@ bin/.gitkeep
 
 # Include walkthrough media
 !media/**
+
+# Include Simba helper scripts
+!resources/**
